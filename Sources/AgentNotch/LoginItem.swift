@@ -4,7 +4,7 @@ import ServiceManagement
 /// D16 / V6: `SMAppService.mainApp` first, a LaunchAgent plist as the fallback.
 @MainActor
 enum LoginItem {
-    static let label = "local.agentnotch"
+    static let label = "com.bagustyo92.agentnotch"
 
     static var launchAgentURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -33,6 +33,9 @@ enum LoginItem {
         do {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             removeLaunchAgent()
+            if enabled, SMAppService.mainApp.status == .requiresApproval {
+                return "Approve AgentNotch in System Settings › General › Login Items, then switch this on again"
+            }
             return nil
         } catch {
             guard enabled else { removeLaunchAgent(); return nil }

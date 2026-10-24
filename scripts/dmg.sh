@@ -13,4 +13,5 @@ DMG="build/AgentNotch-$VERSION.dmg"
 rm -f "$DMG"
 hdiutil create -volname "AgentNotch $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
 rm -rf "$STAGE"
+if [ "${SIGN_IDENTITY:--}" != "-" ]; then codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"; fi
 shasum -a 256 "$DMG"

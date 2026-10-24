@@ -14,4 +14,4 @@ labels: bug
 - macOS:
 - Where the session runs (Terminal / Cursor / VS Code / --bg):
 
-**Output of `AgentNotch --dump`** (optional; remove titles, branches and activity you don't want public)
+**Output of `AgentNotch --dump`** (optional; titles and activity are hidden by default, repo and branch names are not: remove any you don't want public)

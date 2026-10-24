@@ -60,3 +60,36 @@ import Testing
         #expect(throws: (any Error).self) { try AgentsCommand.decode(Data("not json".utf8), now: Date()) }
     }
 }
+
+@Suite struct ClaudeLocator {
+    private func home(with relativePaths: [String]) throws -> URL {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("home-\(UUID().uuidString)", isDirectory: true)
+        for path in relativePaths {
+            let url = home.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "#!/bin/sh\n".write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        return home
+    }
+
+    @Test func findsTheLocalInstaller() throws {
+        let h = try home(with: [".claude/local/claude"])
+        #expect(AgentsCommand.locateExecutable(home: h, systemPaths: [])?.path == h.appendingPathComponent(".claude/local/claude").path)
+    }
+
+    @Test func findsAnNpmGlobalInstall() throws {
+        let h = try home(with: [".npm-global/bin/claude"])
+        #expect(AgentsCommand.locateExecutable(home: h, systemPaths: [])?.path == h.appendingPathComponent(".npm-global/bin/claude").path)
+    }
+
+    @Test func prefersTheNewestNvmNode() throws {
+        let h = try home(with: [".nvm/versions/node/v18.20.0/bin/claude", ".nvm/versions/node/v22.1.0/bin/claude"])
+        #expect(AgentsCommand.locateExecutable(home: h, systemPaths: [])?.path.contains("v22.1.0") == true)
+    }
+
+    @Test func nothingInstalledGivesNil() throws {
+        #expect(AgentsCommand.locateExecutable(home: try home(with: []), systemPaths: []) == nil)
+    }
+}

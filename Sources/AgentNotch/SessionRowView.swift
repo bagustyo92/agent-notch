@@ -152,11 +152,12 @@ struct TreeConnector: View {
     var body: some View {
         Canvas { context, size in
             let x = level == 1 ? 13.0 : 31.0
+            let midY: CGFloat = size.height / 2         // explicit type: Swift 6.1 finds `/ 2 - 5` ambiguous
             var path = Path()
             path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: size.height / 2 - 5))
-            path.addQuadCurve(to: CGPoint(x: x + 6, y: size.height / 2), control: CGPoint(x: x, y: size.height / 2))
-            path.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+            path.addLine(to: CGPoint(x: x, y: midY - 5))
+            path.addQuadCurve(to: CGPoint(x: x + 6, y: midY), control: CGPoint(x: x, y: midY))
+            path.addLine(to: CGPoint(x: size.width, y: midY))
             context.stroke(path, with: .color(.primary.opacity(0.22)), lineWidth: 1)
         }
         .frame(width: level == 1 ? 24 : 42)
@@ -387,10 +388,12 @@ struct LiveStripView: View {
             let state = DisplayState.of(session, now: now)
             HStack(spacing: 8) {
                 StateBadge(state: state, size: 20)
-                Text(session.repo)
+                Text(StripLabel.text(for: session, hideDetails: settings.hideDetails))
                     .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(1)
                     .layoutPriority(1)
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.25), value: session.aiTitle)
                 PhaseLine(
                     id: session.id, state: state, activity: session.activity, hideDetails: settings.hideDetails, now: now,
                     waitingFor: session.waitingFor, needs: session.needs, finishedAt: session.turnFinishedAt, size: 12
