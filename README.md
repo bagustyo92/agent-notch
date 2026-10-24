@@ -100,9 +100,15 @@ AgentNotch only reads, and only on your Mac:
   model, effort, activity);
 - process facts (executable path, terminal, parent process) for the session processes.
 
-It never opens `*.key` files or reads tokens, never shows Bash commands, search patterns, URLs or
-queries, masks anything that looks like a secret, and keeps everything in memory. The only things
-it saves are your four settings. It makes no network connections of any kind.
+It never opens `*.key` files or reads tokens and keeps everything in memory. The only things it
+saves are your four settings. The AgentNotch process makes no network connections.
+
+What it shows: the AI title, the first line of Claude's latest text, and the description of a Bash
+step (never the command itself). Long tokens and `key=value` credentials are masked, but nothing
+else is filtered, so a title or a line of text can still contain something you would not share.
+Switch on **Hide details** before a screen share: it replaces titles and activity with the repo,
+branch and a generic status. `AgentNotch --dump` and `--watch` hide titles and activity too, unless
+you pass `--full`.
 
 ## Uninstall
 
@@ -113,6 +119,9 @@ delete the app and its settings:
 rm -rf /Applications/AgentNotch.app ~/Applications/AgentNotch.app
 defaults delete com.bagustyo92.agentnotch
 ```
+
+Versions before 0.4.0 used the bundle id `local.agentnotch`; its settings, if any, are under
+`defaults delete local.agentnotch`.
 
 ## Contributing
 
@@ -125,8 +134,9 @@ and decisions live in [docs/DESIGN.md](docs/DESIGN.md).
 Handy flags while developing:
 
 ```sh
-.build/debug/AgentNotch --dump          # print the current rows once
+.build/debug/AgentNotch --dump          # print the current rows once (titles and activity hidden)
 .build/debug/AgentNotch --watch 30      # print row changes with timestamps for 30 s
+.build/debug/AgentNotch --dump --full   # same, with titles and full activity (do not paste publicly)
 .build/debug/AgentNotch --demo          # replay synthetic sessions, for screenshots (--demo dropdown for the menu bar card)
 ```
 

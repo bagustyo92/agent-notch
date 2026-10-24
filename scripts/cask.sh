@@ -31,6 +31,7 @@ cask "agent-notch" do
   end
 
   zap trash: [
+    "~/Library/LaunchAgents/com.bagustyo92.agentnotch.plist",
     "~/Library/Preferences/com.bagustyo92.agentnotch.plist",
     "~/Library/Preferences/local.agentnotch.plist",
   ]

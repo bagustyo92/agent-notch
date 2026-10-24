@@ -15,14 +15,23 @@ public struct AgentsCommand: Sendable {
     public var timeout: TimeInterval
 
     /// Candidate locations for the `claude` binary. The app is launched by launchd/Finder with a
-    /// minimal PATH, so `~/.local/bin` must be tried explicitly (F4).
-    public static func locateExecutable(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL? {
-        let candidates = [
+    /// minimal PATH, so `~/.local/bin` must be tried explicitly (F4). npm and nvm installs come last.
+    public static func locateExecutable(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        systemPaths: [String] = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+    ) -> URL? {
+        let fm = FileManager.default
+        var candidates = [
             home.appendingPathComponent(".local/bin/claude"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/claude"),
-            URL(fileURLWithPath: "/usr/local/bin/claude"),
+            home.appendingPathComponent(".claude/local/claude"),
+        ] + systemPaths.map { URL(fileURLWithPath: $0) } + [
+            home.appendingPathComponent(".npm-global/bin/claude"),
+            home.appendingPathComponent(".bun/bin/claude"),
         ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        let nvm = home.appendingPathComponent(".nvm/versions/node")
+        let versions = (try? fm.contentsOfDirectory(atPath: nvm.path)) ?? []
+        candidates += versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }.map { nvm.appendingPathComponent("\($0)/bin/claude") }
+        return candidates.first { fm.isExecutableFile(atPath: $0.path) }
     }
 
     public init(executable: URL? = AgentsCommand.locateExecutable(), timeout: TimeInterval = 5) {

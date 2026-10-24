@@ -168,3 +168,34 @@ private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
         #expect(SessionTree.sectioned([w]).map(\.id) == ["h:working", "s:w", "a:w:a"])
     }
 }
+
+@Suite struct StripLabels {
+    private func session(title: String?, cwd: String = "/Users/dev/work/repo-a") -> Session {
+        Session(id: "s", cwd: cwd, name: "repo-a-36", aiTitle: title, status: .working, statusChangedAt: t0, startedAt: t0)
+    }
+
+    @Test func shortTitleIsKept() {
+        #expect(StripLabel.text(for: session(title: "Fix invoice rounding"), hideDetails: false) == "Fix invoice rounding")
+    }
+
+    @Test func longTitleIsCutAtAWordBoundary() {
+        let label = StripLabel.text(for: session(title: "Redesign the checkout flow for guests"), hideDetails: false)
+        #expect(label == "Redesign the checkout…")
+        #expect(label.count <= StripLabel.maxLength)
+    }
+
+    @Test func firstWordLongerThanTheCapIsCutHard() {
+        let label = StripLabel.shorten("Internationalization-and-localization-pipeline")
+        #expect(label.count == StripLabel.maxLength)
+        #expect(label.hasSuffix("…"))
+    }
+
+    @Test func noTitleFallsBackToTheRepo() {
+        #expect(StripLabel.text(for: session(title: nil), hideDetails: false) == "repo-a")
+        #expect(StripLabel.text(for: session(title: "  "), hideDetails: false) == "repo-a")
+    }
+
+    @Test func hideDetailsNeverShowsTheTitle() {
+        #expect(StripLabel.text(for: session(title: "Fix invoice rounding"), hideDetails: true) == "repo-a")
+    }
+}

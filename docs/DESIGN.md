@@ -24,7 +24,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | R1 | **Read-only.** Never approve or deny, send messages, stop, resume, attach, or kill. Never write anything under `~/.claude`. |
 | R2 | **Never block or slow a session.** No hooks. Do not touch `~/.claude/settings.json`; users often have their own hooks there. Sessions must behave identically whether the app is running, quit or crashed. |
 | R3 | **Local-only.** Zero network calls. No analytics, crash reporting, update checks or third-party SDKs. Use the Swift stdlib and Apple frameworks only. |
-| R4 | **No persistence of transcript content.** Derived fields live in memory only. No log files. UserDefaults holds settings only (`hideDetails`, `launchAtLogin`). |
+| R4 | **No persistence of transcript content.** Derived fields live in memory only. No log files. UserDefaults holds settings only (`hideDetails`, `launchAtLogin`, `autoOpen`, `showSubagentsLive`). |
 | R5 | **Never open secret files.** These are `~/.claude/sessions/*.key` and `~/.claude/daemon/control.key`. From `~/.claude/ide/*.lock`, decode only `ideName`, `pid` and `workspaceFolders`. That file also holds an `authToken`: never log, display or keep it. |
 | R6 | **No real transcripts in the repo.** Fixtures are synthetic and use `/Users/dev/...` paths. The pre-commit hook (M1) enforces this. |
 | R7 | **Cost limits.** CPU below 1% when idle. A status change is visible within 1 s. Transcripts are tailed from a byte offset; never re-read a whole transcript. Never poll `claude agents --json`; F1 explains why. |

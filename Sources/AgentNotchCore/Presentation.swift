@@ -48,6 +48,30 @@ public enum NeedsLabel {
     }
 }
 
+/// The name on a live-strip line: the AI title cut short, or the repo while no title exists yet
+/// and under Hide details (D10, D35).
+public enum StripLabel {
+    /// Longest label, ellipsis included.
+    public static let maxLength = 24
+
+    public static func text(for session: Session, hideDetails: Bool) -> String {
+        guard !hideDetails, let title = session.aiTitle else { return session.repo }
+        let short = shorten(title)
+        return short.isEmpty ? session.repo : short
+    }
+
+    /// Cut at a word boundary, ending in `…`; a first word longer than the cap is cut hard.
+    static func shorten(_ title: String, limit: Int = maxLength) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        var head = String(trimmed.prefix(limit - 1))
+        let cutMidWord = !(trimmed.dropFirst(head.count).first?.isWhitespace ?? true)
+        if cutMidWord, let space = head.lastIndex(where: \.isWhitespace) { head = String(head[..<space]) }
+        head = head.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        return head.isEmpty ? String(trimmed.prefix(limit - 1)) + "…" : head + "…"
+    }
+}
+
 /// `claude-opus-5-5` → `Opus 5.5`, `claude-sonnet-4-5-20250929[1m]` → `Sonnet 4.5`,
 /// `claude-3-5-haiku-20241022` → `Haiku 3.5` (D30). Ids that do not look like that pass through.
 public enum ModelName {

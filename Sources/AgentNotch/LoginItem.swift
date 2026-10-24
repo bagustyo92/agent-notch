@@ -33,6 +33,9 @@ enum LoginItem {
         do {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             removeLaunchAgent()
+            if enabled, SMAppService.mainApp.status == .requiresApproval {
+                return "Approve AgentNotch in System Settings › General › Login Items, then switch this on again"
+            }
             return nil
         } catch {
             guard enabled else { removeLaunchAgent(); return nil }

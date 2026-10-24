@@ -387,10 +387,12 @@ struct LiveStripView: View {
             let state = DisplayState.of(session, now: now)
             HStack(spacing: 8) {
                 StateBadge(state: state, size: 20)
-                Text(session.repo)
+                Text(StripLabel.text(for: session, hideDetails: settings.hideDetails))
                     .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(1)
                     .layoutPriority(1)
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.25), value: session.aiTitle)
                 PhaseLine(
                     id: session.id, state: state, activity: session.activity, hideDetails: settings.hideDetails, now: now,
                     waitingFor: session.waitingFor, needs: session.needs, finishedAt: session.turnFinishedAt, size: 12

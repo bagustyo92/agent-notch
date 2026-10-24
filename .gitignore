@@ -3,4 +3,4 @@ build/
 .swiftpm/
 .DS_Store
 *.jsonl
-!Tests/Fixtures/*.jsonl
+!Tests/Fixtures/**/*.jsonl

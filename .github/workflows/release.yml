@@ -18,6 +18,9 @@ jobs:
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check the tag matches VERSION
+        run: |
+          [ "${GITHUB_REF_NAME#v}" = "$(cat VERSION)" ] || { echo "tag $GITHUB_REF_NAME does not match VERSION $(cat VERSION)" >&2; exit 1; }
       - run: scripts/test.sh
       - name: Import Developer ID certificate
         if: env.MACOS_CERT_P12 != ''

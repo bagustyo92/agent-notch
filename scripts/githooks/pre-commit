@@ -1,6 +1,6 @@
 #!/bin/bash
 # R6: no real transcripts in the repo. Fixtures are synthetic, small, and use /Users/dev paths.
-# Checks the STAGED content of every added/modified file (Markdown excepted: PLAN.md quotes a real
+# Checks the STAGED content of every added/modified file (Markdown excepted: docs may quote a real
 # path as an encoding example). JSON/JSONL files are also size-capped at 20 KB.
 fail=0
 while IFS= read -r -d '' f; do

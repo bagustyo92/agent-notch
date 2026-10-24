@@ -27,7 +27,7 @@ The full list is the "Hard rules" table in [docs/DESIGN.md](docs/DESIGN.md). In 
 1. **Read-only.** Never approve, send, stop, resume, attach or kill a session. Never write under `~/.claude`.
 2. **No hooks, no slowdown.** Sessions must behave the same whether AgentNotch runs, quits or crashes.
 3. **Local only.** No network calls, analytics, crash reporters, update checks or third-party SDKs.
-4. **Nothing persisted** except the two settings. Transcript content stays in memory as derived strings.
+4. **Nothing persisted** except the four settings. Transcript content stays in memory as derived strings.
 5. **Never open secrets** (`~/.claude/sessions/*.key`, `~/.claude/daemon/control.key`, IDE `authToken`).
 6. **Synthetic fixtures only**, with `/Users/dev/...` paths.
 7. **Cheap.** Under 1% CPU when idle; tail transcripts from an offset; never poll `claude agents`.
