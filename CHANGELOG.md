@@ -6,6 +6,7 @@
 - `--dump` and `--watch` hide titles and activity by default; `--full` prints them. The bug report template says so.
 - `claude` is also found in `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin` and nvm installs.
 - Launch at login now says so when macOS still needs your approval instead of showing the toggle on.
+- Fixed a compile error on Swift 6.1 (the CI toolchain): `size.height / 2 - 5` in the subagent connector was ambiguous. CI and Release had failed on every run because of it.
 - Fixed a clean checkout failing `MonitorRefresh`: a test fixture was caught by `.gitignore` and never committed.
 - Release workflow stops when the tag does not match `VERSION`.
 - README: the privacy section says what is and is not filtered. The cask now removes the login-item plist on zap.
