@@ -4,7 +4,7 @@ import ServiceManagement
 /// D16 / V6: `SMAppService.mainApp` first, a LaunchAgent plist as the fallback.
 @MainActor
 enum LoginItem {
-    static let label = "local.agentnotch"
+    static let label = "com.bagustyo92.agentnotch"
 
     static var launchAgentURL: URL {
         FileManager.default.homeDirectoryForCurrentUser

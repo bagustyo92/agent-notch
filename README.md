@@ -26,7 +26,7 @@ All media below is a scripted run on synthetic sessions (`AgentNotch --demo`), n
 
 ## Install
 
-Requirements: macOS 15 or later, Apple silicon, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
+Requirements: macOS 15 or later (Apple silicon or Intel), and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
 
 ### Option 1: download the app
 
@@ -40,7 +40,13 @@ Requirements: macOS 15 or later, Apple silicon, and [Claude Code](https://docs.c
    xattr -dr com.apple.quarantine /Applications/AgentNotch.app
    ```
 
-### Option 2: build from source
+### Option 2: Homebrew
+
+```sh
+brew install --cask bagustyo92/tap/agent-notch
+```
+
+### Option 3: build from source
 
 Needs only the Xcode Command Line Tools (`xcode-select --install`); full Xcode is optional.
 
@@ -105,7 +111,7 @@ delete the app and its settings:
 
 ```sh
 rm -rf /Applications/AgentNotch.app ~/Applications/AgentNotch.app
-defaults delete local.agentnotch
+defaults delete com.bagustyo92.agentnotch
 ```
 
 ## Contributing

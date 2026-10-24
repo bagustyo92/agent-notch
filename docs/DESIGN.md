@@ -56,7 +56,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D19 | **Build from scratch** as a Swift package with no hooks. Forks rejected after a source audit of vibe-notch@10f1d24 and coucou@47d1c2d. Reasons: <br>• Both block sessions through PermissionRequest hooks (waits of up to 300 s and 118 s). <br>• vibe-notch ships Mixpanel (keyed by hardware UUID) plus Sparkle. <br>• coucou shows one pill per host app and carries about 40 integrations plus an iPhone relay. <br>• Neither focuses a specific window. <br>• Neither sees sessions that were already running when the app launched. <br>• Both need Xcode. |
 | D20 | **Menu bar item:** icon plus two stacked small numbers, **working** on top and **waiting** below. The icon tints orange when waiting > 0. |
 | D21 | **Division of work:** the notch is the live view. The menu bar dropdown shows the **same rows** plus the controls: Hide details, Pop open automatically, Show subagents in live view, Launch at login, version line, Quit. Both render from one in-memory `SessionStore`. |
-| D22 | **Names:** app `AgentNotch`, directory `agent-notch`, bundle id `local.agentnotch`. |
+| D22 | **Names:** app `AgentNotch`, directory `agent-notch`, bundle id `com.bagustyo92.agentnotch`. |
 | D23 | **Session list source:** `claude agents --json`, run only when `~/.claude/sessions/` changes, debounced to 300 ms. Fall back to reading `~/.claude/sessions/*.json` directly if the command fails. **Activity source:** the transcript tail. |
 | D24 | **Format drift:** the row shows its status plus "activity unavailable". The dropdown shows `Tested with Claude Code 2.1.310 · running <x>` when any session's version differs. |
 | D25 | **Terminal.app focus:** select the exact window and tab through AppleScript. This needs a one-time macOS Automation permission. If the owner denies it, just activate Terminal. |
@@ -114,7 +114,7 @@ Fix (0.3.0): a collapsed side with nothing to show had zero width, which slid th
   - **ASSUMPTION:** a locally built app carries no quarantine xattr, so it will run.
 - **V5.** While a session waits on a permission prompt, run `claude agents --json` and record `status` and `waitingFor`. Run `claude agents --json --all` and record every background `state` value. Fill in the status mapping below.
 - **V6.** After M1, check that `SMAppService.mainApp.register()` works for an ad-hoc-signed app in `~/Applications`.
-  - If it doesn't, fall back to a LaunchAgent: `~/Library/LaunchAgents/local.agentnotch.plist` with `RunAtLoad` set to true.
+  - If it doesn't, fall back to a LaunchAgent: `~/Library/LaunchAgents/com.bagustyo92.agentnotch.plist` with `RunAtLoad` set to true.
 
 ## M0 results (2026-10-24)
 
@@ -335,7 +335,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>local.agentnotch</string>
+  <key>CFBundleIdentifier</key><string>com.bagustyo92.agentnotch</string>
   <key>CFBundleName</key><string>AgentNotch</string>
   <key>CFBundleExecutable</key><string>AgentNotch</string>
   <key>CFBundlePackageType</key><string>APPL</string>

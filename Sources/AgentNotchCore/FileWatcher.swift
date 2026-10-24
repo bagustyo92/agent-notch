@@ -14,7 +14,7 @@ public final class FileWatcher: @unchecked Sendable {
     private let paths: [String]
     private let latency: TimeInterval
     private let handler: Handler
-    private let queue = DispatchQueue(label: "local.agentnotch.filewatcher")
+    private let queue = DispatchQueue(label: "com.bagustyo92.agentnotch.filewatcher")
     private let lock = NSLock()
     private var stream: FSEventStreamRef?
 

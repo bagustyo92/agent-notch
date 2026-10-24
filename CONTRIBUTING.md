@@ -62,5 +62,24 @@ shape, make the parser tolerate it, and update the "Verified facts" table in `do
 
 - Verify VS Code routes `windowId=` deep links, then enable it in `IDEDeepLink` (see D28).
 - Child rows for subagents (v2 in the design).
-- Notarized releases and a Homebrew cask.
 - iTerm2, Ghostty and WezTerm tab focus.
+
+## Releasing
+
+1. Bump `VERSION`, commit, then push a tag: `git tag -a vX.Y.Z -m "AgentNotch X.Y.Z" && git push origin vX.Y.Z`.
+2. The Release workflow tests, builds the universal app, packages the DMG and publishes the GitHub release.
+3. Update the Homebrew tap: `scripts/cask.sh AgentNotch-X.Y.Z.dmg > Casks/agent-notch.rb` in `bagustyo92/homebrew-tap`
+   (use the DMG downloaded from the release, so the checksum matches what users get).
+
+Without secrets the DMG is ad-hoc signed and not notarized. To notarize (needs a paid Apple Developer
+account), add these repository secrets and the workflow does the rest:
+
+| Secret | Value |
+|---|---|
+| `MACOS_CERT_P12` | Developer ID Application certificate and key, exported as .p12, base64-encoded |
+| `MACOS_CERT_PASSWORD` | Password of that .p12 |
+| `APPLE_ID` | Apple ID email used for notarization |
+| `APPLE_TEAM_ID` | Team ID of the developer account |
+| `APPLE_APP_PASSWORD` | App-specific password for that Apple ID |
+
+Then remove the `postflight` quarantine block from `scripts/cask.sh` and the Open Anyway steps from the README.
