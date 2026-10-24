@@ -1,0 +1,97 @@
+import AgentNotchCore
+import AppKit
+
+@main
+@MainActor
+struct AgentNotchMain {
+    static func main() {
+        let args = CommandLine.arguments
+        if args.contains("--dump") {
+            DebugDump.run(watchSeconds: 0)
+            return
+        }
+        if let i = args.firstIndex(of: "--watch") {
+            DebugDump.run(watchSeconds: Double(args.dropFirst(i + 1).first ?? "20") ?? 20)
+            return
+        }
+        if let i = args.firstIndex(of: "--login-item") {
+            switch args.dropFirst(i + 1).first {
+            case "on": print(LoginItem.set(enabled: true) ?? "ok")
+            case "off": print(LoginItem.set(enabled: false) ?? "ok")
+            default: print(LoginItem.statusDescription)
+            }
+            return
+        }
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        // Belt and braces with LSUIElement: no Dock icon even when run via `swift run` (D16).
+        app.setActivationPolicy(.accessory)
+        app.run()
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let store = SessionStore()
+    let settings = Settings()
+    private var monitor: Monitor?
+    private var statusItem: StatusItemController?
+    private var notch: NotchPanelController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let monitor = Monitor(store: store)
+        self.monitor = monitor
+        statusItem = StatusItemController(store: store, settings: settings)
+        let notch = NotchPanelController(store: store, settings: settings)
+        self.notch = notch
+        store.onAttention = { [weak notch] session in notch?.pulse(session) }
+        monitor.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        monitor?.stop()
+    }
+}
+
+/// `AgentNotch --dump`: one refresh, print the rows, exit. `--watch <s>`: run the monitor and
+/// print every row change with a timestamp. Used by the M2/M3 live checks.
+@MainActor
+enum DebugDump {
+    static func run(watchSeconds: Double) {
+        let monitor = Monitor()
+        Task { @MainActor in
+            if watchSeconds <= 0 {
+                await monitor.refresh()
+                try? await Task.sleep(for: .seconds(1.5))
+                monitor.store.sessions.forEach { print(row($0)) }
+            } else {
+                monitor.start()
+                var last: [String: String] = [:]
+                let deadline = Date().addingTimeInterval(watchSeconds)
+                while Date() < deadline {
+                    for s in monitor.store.sessions {
+                        let r = row(s)
+                        if last[s.id] != r { last[s.id] = r; print("\(stamp())\t\(r)"); fflush(stdout) }
+                    }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                monitor.stop()
+            }
+            print("working=\(monitor.store.workingCount) waiting=\(monitor.store.waitingCount) note=\(monitor.store.versionNote ?? "-")")
+            exit(0)
+        }
+        dispatchMain()
+    }
+
+    static func row(_ s: Session) -> String {
+        let pid = s.pid.map(String.init) ?? "-"
+        let activity = s.activity?.full ?? (s.activityUnavailable ? "activity unavailable" : "-")
+        let link = IDEDeepLink.resolve(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt)?.absoluteString ?? "-"
+        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(s.title)\t\(activity)\tlink=\(link)"
+    }
+
+    static func stamp() -> String {
+        Date().formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute().second().secondFraction(.fractional(3)))
+    }
+}

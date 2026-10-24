@@ -1,0 +1,23 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/test.sh
+      - name: Build app and DMG
+        run: |
+          export VERSION="${GITHUB_REF_NAME#v}"
+          scripts/bundle.sh
+          scripts/dmg.sh
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" build/AgentNotch-*.dmg --title "AgentNotch $GITHUB_REF_NAME" --generate-notes

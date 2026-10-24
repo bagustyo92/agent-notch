@@ -1,0 +1,14 @@
+#!/bin/bash
+# R6: no real transcripts in the repo. Fixtures are synthetic, small, and use /Users/dev paths.
+# Checks the STAGED content of every added/modified file (Markdown excepted: PLAN.md quotes a real
+# path as an encoding example). JSON/JSONL files are also size-capped at 20 KB.
+fail=0
+while IFS= read -r -d '' f; do
+  case "$f" in
+    *.json|*.jsonl)
+      if [ "$(git show ":$f" | wc -c)" -gt 20480 ]; then echo "blocked: $f > 20 KB (real transcript?)"; fail=1; fi ;;
+    *.md) continue ;;
+  esac
+  if git show ":$f" | grep -qF "$HOME"; then echo "blocked: $f contains a real home path"; fail=1; fi
+done < <(git diff --cached --name-only -z --diff-filter=AM)
+exit $fail

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Synthetic stand-in for `claude agents --json`.
+[ "$1" = "agents" ] && [ "$2" = "--json" ] || exit 64
+cat "$(dirname "$0")/../agents.json"

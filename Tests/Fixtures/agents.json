@@ -1,0 +1,7 @@
+[
+  {"pid":4242,"cwd":"/Users/dev/work/repo-a","kind":"interactive","startedAt":1792811619613,"sessionId":"11111111-1111-4111-8111-111111111111","name":"repo-a-36","status":"busy"},
+  {"pid":4243,"cwd":"/Users/dev/work/repo-b","kind":"interactive","startedAt":1792811937243,"sessionId":"22222222-2222-4222-8222-222222222222","name":"repo-b-cf","status":"waiting","waitingFor":"permission"},
+  {"id":"33333333","cwd":"/Users/dev/work/repo-c","kind":"background","startedAt":1787708968917,"sessionId":"33333333-3333-4333-8333-333333333333","name":"bg task","state":"blocked"},
+  {"kind":"mystery","cwd":"/Users/dev/work/repo-d","startedAt":"2026-10-24T05:00:00.000Z","sessionId":"44444444-4444-4444-8444-444444444444","name":"odd one"},
+  {"pid":1,"cwd":"/Users/dev/no-session-id","kind":"interactive","startedAt":1792811619613,"name":"dropped"}
+]
