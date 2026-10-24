@@ -2,19 +2,32 @@ import Foundation
 
 public enum TranscriptRole: Sendable, Equatable { case assistant, user }
 
+/// The per-line facts beyond the activity: phase, model, effort and the `Agent` calls a line
+/// starts (D29, D30, D33).
+public struct MessageDetails: Sendable, Equatable {
+    public var phase: Phase?
+    public var model: String?
+    public var effort: String?
+    public var spawnedToolUseIds: [String] = []
+    public init(phase: Phase? = nil, model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = []) {
+        self.phase = phase; self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds
+    }
+}
+
 /// What one transcript line contributes. A decode failure is `nil` from the parser.
 public enum TranscriptLine: Sendable, Equatable {
     case aiTitle(String)
-    case message(role: TranscriptRole, branch: String?, activity: Activity?)
+    case message(role: TranscriptRole, branch: String?, activity: Activity?, details: MessageDetails = MessageDetails())
     case ignored
 }
 
-/// Tolerant JSONL line parser. Reads only `type`, `aiTitle`, `gitBranch`, `isSidechain` and
-/// `message.content[].{type,name,input,text}` (F6). Never retains the line.
+/// Tolerant JSONL line parser. Reads only `type`, `aiTitle`, `gitBranch`, `isSidechain`, `effort`
+/// and `message.{model,content[].{type,id,name,input,text}}` (F6). Never retains the line.
 public enum TranscriptLineParser {
-    public static func parse(_ line: Data) -> TranscriptLine? {
+    /// `includeSidechain` is for subagent transcripts, whose every line is a sidechain (D33).
+    public static func parse(_ line: Data, includeSidechain: Bool = false) -> TranscriptLine? {
         guard let obj = try? JSONSerialization.jsonObject(with: line), let dict = obj as? [String: Any] else { return nil }
-        if (dict["isSidechain"] as? Bool) == true { return .ignored }                     // D2: subagents are v2
+        if !includeSidechain, (dict["isSidechain"] as? Bool) == true { return .ignored }   // D2: the main row ignores them
         guard let type = dict["type"] as? String else { return .ignored }
         switch type {
         case "ai-title":
@@ -24,8 +37,17 @@ public enum TranscriptLineParser {
         case "assistant", "user":
             let role: TranscriptRole = type == "assistant" ? .assistant : .user
             let branch = (dict["gitBranch"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let activity = role == .assistant ? activity(in: dict["message"]) : nil
-            return .message(role: role, branch: branch, activity: activity)
+            var details = MessageDetails(effort: token(dict["effort"]))
+            guard role == .assistant else {
+                // A prompt or a tool result: the model has the turn and has not answered yet.
+                details.phase = .thinking
+                return .message(role: role, branch: branch, activity: nil, details: details)
+            }
+            let message = dict["message"] as? [String: Any]
+            details.phase = phase(in: message)
+            details.model = token(message?["model"])
+            details.spawnedToolUseIds = spawnedToolUseIds(in: message)
+            return .message(role: role, branch: branch, activity: activity(in: message), details: details)
         default:
             return .ignored
         }
@@ -46,6 +68,37 @@ public enum TranscriptLineParser {
         }
         return lastText
     }
+
+    /// The phase of the line's last block: the block Claude Code wrote most recently.
+    static func phase(in message: [String: Any]?) -> Phase? {
+        guard let blocks = message?["content"] as? [Any] else { return nil }
+        for block in blocks.reversed() {
+            switch (block as? [String: Any])?["type"] as? String {
+            case "tool_use": return .tool
+            case "text": return .writing
+            case "thinking", "redacted_thinking": return .thinking
+            default: continue
+            }
+        }
+        return nil
+    }
+
+    static func spawnedToolUseIds(in message: [String: Any]?) -> [String] {
+        guard let blocks = message?["content"] as? [Any] else { return [] }
+        return blocks.compactMap { block in
+            guard let block = block as? [String: Any], block["type"] as? String == "tool_use",
+                  let name = block["name"] as? String, ActivitySummary.describedTools.contains(name) else { return nil }
+            return token(block["id"])
+        }
+    }
+
+    /// Short machine tokens only (model ids, effort levels, tool_use ids). Anything else, including
+    /// `<synthetic>` placeholders, is dropped rather than shown.
+    static func token(_ any: Any?) -> String? {
+        guard let s = any as? String, !s.isEmpty, s.count <= 64,
+              s.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.[]".contains($0)) }) else { return nil }
+        return s
+    }
 }
 
 /// Fields derived from a read. `nil` means "no new value in this read", so the store leaves the
@@ -54,9 +107,17 @@ public struct TranscriptUpdate: Sendable, Equatable {
     public var aiTitle: String?
     public var branch: String?
     public var activity: Activity?
+    public var phase: Phase?
+    public var model: String?
+    public var effort: String?
+    public var spawnedToolUseIds: [String] = []
     public var unavailable: Bool = false
-    public init(aiTitle: String? = nil, branch: String? = nil, activity: Activity? = nil, unavailable: Bool = false) {
-        self.aiTitle = aiTitle; self.branch = branch; self.activity = activity; self.unavailable = unavailable
+    public init(
+        aiTitle: String? = nil, branch: String? = nil, activity: Activity? = nil, phase: Phase? = nil,
+        model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = [], unavailable: Bool = false
+    ) {
+        self.aiTitle = aiTitle; self.branch = branch; self.activity = activity; self.phase = phase
+        self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds; self.unavailable = unavailable
     }
 }
 
@@ -70,17 +131,19 @@ public final class TranscriptTail {
     public private(set) var decodeSuccesses = 0
     private let chunkSize: Int
     private let maxBackscan: Int
+    private let includeSidechain: Bool
 
-    public init(path: URL, chunkSize: Int = 256 * 1024, maxBackscan: Int = 4 * 1024 * 1024) {
+    public init(path: URL, chunkSize: Int = 256 * 1024, maxBackscan: Int = 4 * 1024 * 1024, includeSidechain: Bool = false) {
         self.path = path
         self.chunkSize = max(16, chunkSize)
         self.maxBackscan = max(self.chunkSize, maxBackscan)
+        self.includeSidechain = includeSidechain
     }
 
     public var unavailable: Bool { decodeFailures >= Self.unavailableThreshold && decodeSuccesses == 0 }
 
-    /// Read backwards in chunks (up to `maxBackscan`) until the latest title, branch and
-    /// assistant activity are known. Leaves `offset` at EOF.
+    /// Read backwards in chunks (up to `maxBackscan`) until the latest title, branch, assistant
+    /// activity, phase, model and effort are known. Leaves `offset` at EOF.
     public func attach() throws -> TranscriptUpdate {
         let handle = try FileHandle(forReadingFrom: path)
         defer { try? handle.close() }
@@ -90,9 +153,11 @@ public final class TranscriptTail {
 
         var found = TranscriptUpdate()
         var haveTitle = false, haveBranch = false, haveActivity = false
+        var havePhase = false, haveModel = false, haveEffort = false
+        var complete: Bool { haveTitle && haveBranch && haveActivity && havePhase && haveModel && haveEffort }
         var carry: [UInt8] = []
         var end = size
-        while end > 0, Int(size - end) < maxBackscan, !(haveTitle && haveBranch && haveActivity) {
+        while end > 0, Int(size - end) < maxBackscan, !complete {
             let start = end > UInt64(chunkSize) ? end - UInt64(chunkSize) : 0
             try handle.seek(toOffset: start)
             var bytes = [UInt8](try handle.read(upToCount: Int(end - start)) ?? Data())
@@ -113,13 +178,16 @@ public final class TranscriptTail {
                 switch parseCounting(Data(line)) {
                 case .aiTitle(let title):
                     if !haveTitle { found.aiTitle = title; haveTitle = true }
-                case .message(let role, let branch, let activity):
+                case .message(let role, let branch, let activity, let details):
                     if !haveBranch, let branch { found.branch = branch; haveBranch = true }
                     if !haveActivity, role == .assistant, let activity { found.activity = activity; haveActivity = true }
+                    if !havePhase, let phase = details.phase { found.phase = phase; havePhase = true }
+                    if !haveModel, let model = details.model { found.model = model; haveModel = true }
+                    if !haveEffort, let effort = details.effort { found.effort = effort; haveEffort = true }
                 case .ignored, nil:
                     break
                 }
-                if haveTitle && haveBranch && haveActivity { break }
+                if complete { break }
             }
             end = start
         }
@@ -151,9 +219,13 @@ public final class TranscriptTail {
         for line in complete.split(separator: 0x0A, omittingEmptySubsequences: true) {
             switch parseCounting(Data(line)) {
             case .aiTitle(let title): update.aiTitle = title
-            case .message(_, let branch, let activity):
+            case .message(_, let branch, let activity, let details):
                 if let branch { update.branch = branch }
                 if let activity { update.activity = activity }
+                if let phase = details.phase { update.phase = phase }
+                if let model = details.model { update.model = model }
+                if let effort = details.effort { update.effort = effort }
+                update.spawnedToolUseIds += details.spawnedToolUseIds
             case .ignored, nil: break
             }
         }
@@ -161,10 +233,20 @@ public final class TranscriptTail {
         return update
     }
 
+    /// Read forward from the start (or the last `maxBytes`) so every `Agent` call is seen; used for
+    /// subagent transcripts, which are short and whose spawned ids nest grandchildren (D33).
+    public func attachFromStart(maxBytes: Int = 4 * 1024 * 1024) throws -> TranscriptUpdate {
+        let size = (try FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        offset = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        decodeFailures = 0
+        decodeSuccesses = 0
+        return try readNew() ?? TranscriptUpdate(unavailable: unavailable)
+    }
+
     private func reattachAfterTruncation() throws -> TranscriptUpdate { try attach() }
 
     private func parseCounting(_ line: Data) -> TranscriptLine? {
-        let parsed = TranscriptLineParser.parse(line)
+        let parsed = TranscriptLineParser.parse(line, includeSidechain: includeSidechain)
         if parsed == nil { decodeFailures += 1 } else { decodeSuccesses += 1 }
         return parsed
     }

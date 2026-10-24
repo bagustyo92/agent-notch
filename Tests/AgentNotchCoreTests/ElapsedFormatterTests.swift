@@ -11,6 +11,11 @@ import Testing
         #expect(ElapsedFormatter.string(seconds) == expected)
     }
 
+    @Test(arguments: [(45.0, "45s"), (72.0, "1m 12s"), (3599.0, "59m 59s"), (3600.0, "1h 0m")])
+    func preciseKeepsSecondsUnderAnHour(seconds: Double, expected: String) {
+        #expect(ElapsedFormatter.precise(seconds) == expected)
+    }
+
     @Test func negativeIsClampedToZero() {
         #expect(ElapsedFormatter.string(-5) == "0s")
     }

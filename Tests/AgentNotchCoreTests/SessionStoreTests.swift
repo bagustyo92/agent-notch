@@ -120,23 +120,40 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
 @Suite struct SessionStoreAttention {
     let store = SessionStore(testedVersion: "2.1.310", attentionInterval: 5)
 
+    private var kinds: [AttentionKind] { store.attentionLog.map(\.kind) }
+
     @Test func firesWhenASessionStartsWaiting() {
         store.replaceList([listed("a", status: "busy")], now: t0)
         store.replaceList([listed("a", status: "waiting")], now: t0.addingTimeInterval(1))
         #expect(store.attentionLog.map(\.id) == ["a"])
+        #expect(kinds == [.needsYou])
     }
 
     @Test func firesWhenATurnFinishes() {
         store.replaceList([listed("a", status: "busy")], now: t0)
         store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(1))
-        #expect(store.attentionLog.map(\.id) == ["a"])
+        #expect(kinds == [.finished])
     }
 
-    @Test func doesNotFireForIdleToWorkingOrForFirstSight() {
-        store.replaceList([listed("a", status: "waiting")], now: t0)
-        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(1))
-        store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(2))
+    @Test func firesWhenASessionStartsWorking() {
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(1))
+        #expect(kinds == [.started])
+    }
+
+    @Test func aNewSessionThatIsAlreadyWorkingFiresButTheFirstListDoesNot() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
         #expect(store.attentionLog.isEmpty)
+        store.replaceList([listed("a", status: "busy"), listed("b", status: "busy")], now: t0.addingTimeInterval(1))
+        #expect(store.attentionLog.map(\.id) == ["b"])
+        #expect(kinds == [.started])
+    }
+
+    @Test func answeringAPromptDoesNotReopenTheNotch() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.replaceList([listed("a", status: "waiting")], now: t0.addingTimeInterval(1))
+        store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(2))
+        #expect(kinds == [.needsYou])
     }
 
     @Test func attentionLogIsBounded() {
@@ -146,14 +163,109 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         #expect(store.attentionLog.count == SessionStore.attentionLogLimit)
     }
 
-    @Test func atMostOneEventPerSessionPerFiveSeconds() {
+    @Test func atMostOneEventPerSessionAndKindPerFiveSeconds() {
         store.replaceList([listed("a", status: "busy")], now: t0)
-        store.replaceList([listed("a", status: "waiting")], now: t0.addingTimeInterval(1))
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(1))
         store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(2))
         store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(3))
-        #expect(store.attentionLog.count == 1)
+        #expect(kinds == [.finished, .started])
         store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(4))
         store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(6.5))
-        #expect(store.attentionLog.count == 2)
+        #expect(kinds == [.finished, .started, .finished])
+    }
+}
+
+@MainActor
+@Suite struct SessionStoreTurns {
+    let store = SessionStore(testedVersion: "2.1.310")
+
+    @Test func finishedTurnIsStampedAndLiveForFourSeconds() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        #expect(store.liveSessions(now: t0).map(\.id) == ["a"])
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(10))
+        let a = store.sessions[0]
+        #expect(a.turnFinishedAt == t0.addingTimeInterval(10))
+        #expect(DisplayState.of(a, now: t0.addingTimeInterval(11)) == .finished)
+        #expect(store.liveSessions(now: t0.addingTimeInterval(13.9)).map(\.id) == ["a"])
+        #expect(store.anyJustFinished(now: t0.addingTimeInterval(13.9)))
+        #expect(store.liveSessions(now: t0.addingTimeInterval(14)).isEmpty)
+        #expect(DisplayState.of(a, now: t0.addingTimeInterval(10 + 600)) == .idle)
+        store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(20))
+        #expect(store.sessions[0].turnFinishedAt == nil)
+    }
+
+    @Test func waitingCarriesWaitingForAndNeedsUntilItResolves() {
+        let waiting = ListedSession(sessionId: "a", pid: 1, cwd: "/Users/dev/a", kind: .interactive, name: "a", startedAt: t0,
+                                    status: "waiting", waitingFor: "dialog open", needs: "choose: allow Bash")
+        store.replaceList([waiting], now: t0)
+        #expect(store.sessions[0].waitingFor == "dialog open")
+        #expect(store.sessions[0].needs == "choose: allow Bash")
+        store.replaceList([listed("a", status: "busy")], now: t0.addingTimeInterval(1))
+        #expect(store.sessions[0].waitingFor == nil)
+        #expect(store.sessions[0].needs == nil)
+    }
+
+    @Test func transcriptPhaseModelAndEffortAreKept() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(phase: .tool, model: "claude-opus-5-5", effort: "high"))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(phase: .thinking))
+        let a = store.sessions[0]
+        #expect(a.phase == .thinking)
+        #expect(a.model == "claude-opus-5-5")
+        #expect(a.effort == "high")
+        #expect(DisplayState.of(a, now: t0) == .working(.thinking))
+    }
+}
+
+@MainActor
+@Suite struct SessionStoreSubagents {
+    let store = SessionStore(testedVersion: "2.1.310")
+
+    private func update(_ id: String, finished: Bool = false, phase: Phase? = .tool, at: Date = t0) -> SubagentUpdate {
+        SubagentUpdate(agentId: id, agentType: "Explore", description: "Scan \(id)", toolUseId: "toolu_\(id)", finished: finished,
+                       startedAt: at, lastWriteAt: at, transcript: TranscriptUpdate(activity: Activity(full: "Grep", brief: "Grep"), phase: phase, model: "claude-haiku-4-5", effort: "low"))
+    }
+
+    @Test func subagentsMergeAndKeepTheirFields() throws {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
+        store.updateSubagent(sessionId: "a", update: SubagentUpdate(agentId: "x", agentType: "Explore", description: "Scan x", transcript: TranscriptUpdate(phase: .thinking)), now: t0.addingTimeInterval(1))
+        let x = try #require(store.sessions[0].subagents.first)
+        #expect(x.phase == .thinking)
+        #expect(x.activity?.brief == "Grep")
+        #expect(x.model == "claude-haiku-4-5")
+        #expect(x.toolUseId == "toolu_x")
+        #expect(x.startedAt == t0)
+    }
+
+    @Test func finishedSubagentsFoldAwayWhenTheTurnEndsAndStayAway() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("done", finished: true), now: t0)
+        store.updateSubagent(sessionId: "a", update: update("bg"), now: t0)
+        #expect(store.sessions[0].subagents.first { $0.id == "done" }?.finishedAt == t0)
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(1))
+        #expect(store.sessions[0].subagents.map(\.id) == ["bg"])         // a still-running one stays
+        store.updateSubagent(sessionId: "a", update: update("done", finished: true), now: t0.addingTimeInterval(2))
+        #expect(store.sessions[0].subagents.map(\.id) == ["bg"])
+        #expect(store.dismissedSubagentIds(sessionId: "a") == ["done"])
+    }
+
+    @Test func quietUnfinishedSubagentsAreDropped() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
+        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStaleWhileWorking - 1))
+        #expect(store.sessions[0].subagents.count == 1)
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(10))
+        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStaleWhileIdle + 1))
+        #expect(store.sessions[0].subagents.isEmpty)
+    }
+
+    @Test func endedSessionsTakeNoSubagents() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
+        store.replaceList([], now: t0.addingTimeInterval(1))
+        #expect(store.sessions[0].subagents.isEmpty)
+        store.updateSubagent(sessionId: "a", update: update("y"), now: t0.addingTimeInterval(2))
+        #expect(store.sessions[0].subagents.isEmpty)
     }
 }

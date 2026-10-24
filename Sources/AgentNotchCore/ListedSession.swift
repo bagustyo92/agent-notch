@@ -14,6 +14,8 @@ public struct ListedSession: Sendable, Equatable {
     /// Background sessions: `blocked`, `done`, `stopped`, … (F1, V5).
     public var state: String?
     public var waitingFor: String?
+    /// Claude Code's one-line "what it needs from you", when a dialog sets one (D31).
+    public var needs: String?
     /// Only the registry carries the Claude Code version (F2).
     public var version: String?
     /// Filled by the monitor from the transcript's mtime; drives the 24 h rule for background sessions.
@@ -22,10 +24,10 @@ public struct ListedSession: Sendable, Equatable {
     public init(
         sessionId: String, pid: Int32? = nil, cwd: String, kind: SessionKind, name: String,
         startedAt: Date, status: String? = nil, state: String? = nil, waitingFor: String? = nil,
-        version: String? = nil, transcriptModifiedAt: Date? = nil
+        version: String? = nil, transcriptModifiedAt: Date? = nil, needs: String? = nil
     ) {
         self.sessionId = sessionId; self.pid = pid; self.cwd = cwd; self.kind = kind; self.name = name
-        self.startedAt = startedAt; self.status = status; self.state = state; self.waitingFor = waitingFor
+        self.startedAt = startedAt; self.status = status; self.state = state; self.waitingFor = waitingFor; self.needs = needs
         self.version = version; self.transcriptModifiedAt = transcriptModifiedAt
     }
 }
@@ -46,7 +48,8 @@ extension ListedSession {
             status: JSONField.string(dict, "status"),
             state: JSONField.string(dict, "state"),
             waitingFor: JSONField.waitingFor(dict),
-            version: JSONField.string(dict, "version")
+            version: JSONField.string(dict, "version"),
+            needs: (dict["needs"] as? String).map(ActivitySummary.finish).flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 

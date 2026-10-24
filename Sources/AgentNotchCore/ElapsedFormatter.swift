@@ -13,6 +13,14 @@ public enum ElapsedFormatter {
         return "\(h / 24)d \(h % 24)h"
     }
 
+    /// Time in the current state for the live strip (Q18): `45s`, `1m 12s`, then as `string`.
+    public static func precise(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite else { return "0s" }
+        let s = Int(min(max(0, seconds), 1e12))
+        guard s >= 60, s < 3600 else { return string(seconds) }
+        return "\(s / 60)m \(s % 60)s"
+    }
+
     /// Running sessions count up to `now`; Done sessions freeze at `endedAt`.
     public static func string(for session: Session, now: Date) -> String {
         string((session.endedAt ?? now).timeIntervalSince(session.startedAt))

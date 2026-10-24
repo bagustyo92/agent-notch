@@ -36,7 +36,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | # | Decision |
 |---|---|
 | D1 | **Surfaces:** notch plus menu bar. **Sources:** every top-level session (Terminal, VS Code ext, Cursor ext, `--bg`). The built-in `claude agents` TUI is not enough: it shows interactive IDE sessions only after `/bg`. |
-| D2 | **Scope:** top-level sessions only in v1. **Out:** subagents (`<sessionId>/subagents/`, transcript lines with `isSidechain:true`) become child rows in v2. Cloud and remote sessions are out of scope. |
+| D2 | **Scope:** top-level sessions only in v1. **Out:** subagents (`<sessionId>/subagents/`, transcript lines with `isSidechain:true`) become child rows in v2 (done in 0.3.0, D33). Cloud and remote sessions are out of scope. |
 | D3 | **Row content:** status, one activity line and elapsed time. Clicking a row focuses that session's window. There is no transcript viewer. |
 | D4 | Read-only (R1). No macOS notification banners. |
 | D5 | Single user, not distributed. |
@@ -47,7 +47,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D10 | **Row layout.** Line 1: **title** (latest `ai-title`, falling back to the registry `name`). Line 2: `repo · branch · <source icon> · elapsed`. Line 3: activity. Plus a status chip. |
 | D11 | **Activity line:** a safe summary only (see "Activity line" below). A "Hide details" toggle sits in the menu bar dropdown. |
 | D12 | **Which sessions appear:** live sessions only. An ended session shows **Done** for 10 min (in memory) and is then dropped. Stale background sessions are hidden (see "Status mapping"). |
-| D13 | **Attention signal:** the notch expands or pulses with the session's row when the session turns *waiting* or finishes a turn. No sound, no banner. |
+| D13 | **Attention signal:** the notch expands or pulses with the session's row when the session turns *waiting* or finishes a turn. No sound, no banner. Superseded in 0.3.0 by D35. |
 | D14 | **Click target and screen.** Click focuses at the window level. With no notch (external display), draw a pill at the top centre of the **menu-bar screen**. |
 | D15 | Xcode is not installed and not needed. The project builds with Command Line Tools only. |
 | D16 | Launch at login. No Dock icon (`LSUIElement`). |
@@ -55,7 +55,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D18 | **Repo:** a standalone Swift package. Synthetic fixtures only (R6). |
 | D19 | **Build from scratch** as a Swift package with no hooks. Forks rejected after a source audit of vibe-notch@10f1d24 and coucou@47d1c2d. Reasons: <br>• Both block sessions through PermissionRequest hooks (waits of up to 300 s and 118 s). <br>• vibe-notch ships Mixpanel (keyed by hardware UUID) plus Sparkle. <br>• coucou shows one pill per host app and carries about 40 integrations plus an iPhone relay. <br>• Neither focuses a specific window. <br>• Neither sees sessions that were already running when the app launched. <br>• Both need Xcode. |
 | D20 | **Menu bar item:** icon plus two stacked small numbers, **working** on top and **waiting** below. The icon tints orange when waiting > 0. |
-| D21 | **Division of work:** the notch is the live view. The menu bar dropdown shows the **same rows** plus the controls: Hide details, Launch at login, version line, Quit. Both render from one in-memory `SessionStore`. |
+| D21 | **Division of work:** the notch is the live view. The menu bar dropdown shows the **same rows** plus the controls: Hide details, Pop open automatically, Show subagents in live view, Launch at login, version line, Quit. Both render from one in-memory `SessionStore`. |
 | D22 | **Names:** app `AgentNotch`, directory `agent-notch`, bundle id `local.agentnotch`. |
 | D23 | **Session list source:** `claude agents --json`, run only when `~/.claude/sessions/` changes, debounced to 300 ms. Fall back to reading `~/.claude/sessions/*.json` directly if the command fails. **Activity source:** the transcript tail. |
 | D24 | **Format drift:** the row shows its status plus "activity unavailable". The dropdown shows `Tested with Claude Code 2.1.310 · running <x>` when any session's version differs. |
@@ -63,6 +63,28 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D26 | This document lives in the repo and is the spec. |
 | D27 | **IDE (Cursor / VS Code) click, fallback:** activate the app by bundle id (F8). No Accessibility permission. Never run `open -a <IDE> <cwd>`: with a multi-root workspace (F7), opening one folder may open a new window. Superseded for Cursor by D28 whenever the window id is known. |
 | D28 | **Cursor click opens the exact chat** (2026-10-24): send `cursor://anthropic.claude-code/open?session=<id>&windowId=<n>`, where `<n>` comes from the session's parent process title (F18). The extension reveals the tab or sidebar that holds the session. Before sending, the pid must be alive, still classify as Cursor's `claude`, have started within 120 s of the session's `startedAt`, and have a live parent inside `Cursor.app`; otherwise fall back to D27. The link is never sent without `windowId`: in a window that does not hold the session, the extension would open a new tab and resume it, a second process on a live session (R1). VS Code stays on D27 until its `windowId` routing is verified. |
+
+### 0.3.0 decisions (2026-10-24, second grilling round)
+
+The "notch looks stuck" report traced to what the row showed, not to a missed update: an instrumented
+build re-rendered the notch on every store publish, in step with the menu bar item. The parser skipped
+`thinking` blocks and `tool_result` lines, so during 10–35 s thinking stretches the row kept the last
+tool while Claude Code's own spinner moved.
+
+| # | Decision |
+|---|---|
+| D29 | **Phase.** Every session and subagent tracks the phase of its newest transcript line: `thinking` (a thinking block, or a prompt / tool result not yet answered), `tool` (tool_use), `writing` (text). While thinking, the row shows a rotating verb from AgentNotch's own list ("Percolating…"), picked per session every 4 s; Claude Code's spinner text is not on disk. |
+| D30 | **Model and effort** come from `message.model` and the line's `effort` field, shown as a capsule `Opus 5.5 · high` on every row and subagent row (not in the collapsed notch). Only short machine tokens are accepted; `<synthetic>` and anything else is dropped. |
+| D31 | **Needs you** uses the registry's `waitingFor` (values in the 2.1.310 binary: `dialog open`, `input needed`, `sandbox request`, `goal proposal`) for the label ("Needs a decision", "Needs your input", …) and its `needs` text, masked, as detail. Hide details drops the `needs` text. |
+| D32 | **Five display states**, one color and one motion each: working (blue, three rising dots, shimmering verb), needs you (orange, breathing glow), finished turn (green check, "Finished · 2m ago" for 10 min), idle (dim dot), ended (grey). Motion honors Reduce Motion. |
+| D33 | **Subagents** are child rows, read from `<sessionId>/subagents/agent-<id>.{jsonl,meta.json}` (meta: `agentType`, `description`, `toolUseId`, `spawnDepth`, `finished`). Grandchildren nest under the subagent whose transcript holds their `toolUseId`; two levels are drawn. Two children show per session, then "+N more" expands the whole tree. Finished children fold away when the parent's turn ends; unfinished ones whose transcript is quiet for 30 min (3 min once the parent is idle) are dropped. They do not count in the notch number. |
+| D34 | **Look.** Dynamic-Island black for the notch with spring morphs between shapes; the dropdown keeps the system material and follows light/dark. Raised row cards, SF Symbols, rounded numerals, no text chips. |
+| D35 | **Live strip** (replaces the D13 pulse). When a session starts working or needs you, the collapsed notch opens a compact strip: one line per live session (at most 3, then "+N more") with time in the current state, plus running subagents when "Show subagents in live view" is on. It stays until the pointer hovers it (that acknowledges it) and reopens on the next transition. A finished turn shows for 4 s. Answering a prompt does not reopen it; the first list after launch does not open it. "Pop open automatically" switches the strip off; the collapsed notch still animates. |
+
+| D36 | **Sections** (third grilling round). The full list (notch hover view and dropdown) groups sessions under headers with a count: **Needs you**, **Working** (with subagent trees), **Done** (finished, idle and ended, newest first). Empty sections are hidden. Done shows its 2 newest, then "Show N more". |
+| D37 | **Identity.** The hover view opens with the same header as the dropdown: bot glyph and "AgentNotch" on the left, the live summary on the right. The collapsed notch and the live strip stay unbranded. |
+
+Fix (0.3.0): a collapsed side with nothing to show had zero width, which slid the working count under the physical notch. Each side now keeps a fixed-width base. Verified by capturing the running panel's own view.
 
 ## Verified facts (2026-10-24)
 
@@ -252,9 +274,11 @@ Risk area: secrets on screen and during screen share.
 
 **Behaviour**
 
-- **Collapsed:** the overlay matches the notch size. Left of the notch: the working count. Right of the notch: an orange dot when waiting > 0. Every other point is click-through, so menu bar items next to the notch must stay clickable.
-- **Expand:** after hovering 150 ms, or on click. **Collapse:** 300 ms after the mouse leaves, or on Esc. Show at most 8 rows, then scroll.
-- **Pulse (D13):** on an attention event, expand for 2.5 s showing only that row with an orange outline, then collapse unless the pointer is hovering. If the panel is already expanded, outline that row in place for 2.5 s instead.
+- **Collapsed:** the overlay matches the notch size while nothing is live. While a session works, needs you, or just finished, it grows an 80 pt side on each edge (spring): working dots and the working count on the left, the needs-you count with a breathing glow (or a green check for 4 s after a turn) on the right. The panel ignores the mouse, so menu bar items next to the notch stay clickable; hover and click are read by event monitors over the visible shape plus 4 pt (Q13).
+- **Live (D35):** the strip described in D35. Hovering it expands to the full list.
+- **Expand:** after hovering 150 ms, or on click. **Collapse:** 300 ms after the mouse leaves, or on Esc. The list scrolls past 520 pt.
+- **Attention while expanded:** outline that row in place for 2.5 s.
+- **Morph:** the controller computes every shape size from fixed row heights. Growing sets the panel frame first and springs the shape; shrinking springs first and trims the panel 480 ms later.
 - **Esc (implementation note, 2026-10-24):** a global key monitor needs the Accessibility permission, which M6 forbids, so Esc is read by a local monitor and works only while AgentNotch is the active app (e.g. right after using the dropdown). Moving the pointer away always collapses.
 
 ### Menu bar item (D20, D21)

@@ -29,47 +29,78 @@ struct StatusItemView: View {
 @Observable
 final class PopoverState {
     var message: String?
+    /// The rows render only while the dropdown is open: a closed popover keeps its view tree, and
+    /// its timelines would otherwise keep ticking.
+    var isShown = false
+    let list = ListUIState()
 }
 
-/// D21: the dropdown shows the same rows plus the controls.
+/// D21: the dropdown shows the same rows plus the controls, on the system popover material.
 struct PopoverView: View {
     let store: SessionStore
     let settings: Settings
     let popoverState: PopoverState
 
-    private var hideDetails: Binding<Bool> {
-        Binding(get: { settings.hideDetails }, set: { settings.hideDetails = $0 })
-    }
-
-    private var launchAtLogin: Binding<Bool> {
-        Binding(get: { settings.launchAtLogin }, set: { settings.launchAtLogin = $0 })
+    private func binding(_ keyPath: ReferenceWritableKeyPath<Settings, Bool>) -> Binding<Bool> {
+        Binding(get: { settings[keyPath: keyPath] }, set: { settings[keyPath: keyPath] = $0 })
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SessionListView(store: store, settings: settings) { popoverState.message = $0 }
+        VStack(alignment: .leading, spacing: 12) {
+            BrandHeader(store: store)
+            if popoverState.isShown {
+                SessionListView(store: store, settings: settings, ui: popoverState.list) { popoverState.message = $0 }
+            }
             if let message = popoverState.message {
                 Text(message)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
-            Divider()
-            Toggle("Hide details", isOn: hideDetails)
-            Toggle("Launch at login", isOn: launchAtLogin)
+            VStack(spacing: 0) {
+                settingRow("eye.slash", "Hide details", isOn: binding(\.hideDetails))
+                Divider().padding(.leading, 36)
+                settingRow("rectangle.topthird.inset.filled", "Pop open automatically", isOn: binding(\.autoOpen))
+                Divider().padding(.leading, 36)
+                settingRow("arrow.triangle.branch", "Show subagents in live view", isOn: binding(\.showSubagentsLive))
+                Divider().padding(.leading, 36)
+                settingRow("power", "Launch at login", isOn: binding(\.launchAtLogin))
+            }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5))
             if let error = settings.loginItemError {
                 Text(error).font(.system(size: 10)).foregroundStyle(.red)
             }
-            Text(store.versionNote ?? "Tested with Claude Code \(SessionStore.defaultTestedVersion)")
-                .font(.system(size: 10))
-                .foregroundStyle(store.versionNote == nil ? Color.secondary : Color.orange)
-            Button("Quit AgentNotch") { NSApp.terminate(nil) }
-                .controlSize(.small)
+            HStack {
+                Text(store.versionNote ?? "Tested with Claude Code \(SessionStore.defaultTestedVersion)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(store.versionNote == nil ? Color.secondary : Color.orange)
+                Spacer()
+                Button { NSApp.terminate(nil) } label: {
+                    Label("Quit", systemImage: "xmark.circle").font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+            }
         }
         .toggleStyle(.switch)
         .controlSize(.small)
-        .padding(12)
-        .frame(width: 400)
+        .padding(14)
+        .frame(width: 440)
+    }
+
+    private func settingRow(_ symbol: String, _ title: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            Text(title).font(.system(size: 12))
+            Spacer()
+            Toggle("", isOn: isOn).labelsHidden()
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 32)
     }
 }
 
@@ -79,7 +110,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 }
 
 @MainActor
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSPopoverDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let popoverState = PopoverState()
@@ -104,17 +135,24 @@ final class StatusItemController: NSObject {
         controller.sizingOptions = [.preferredContentSize]
         popover.contentViewController = controller
         popover.behavior = .transient
-        popover.animates = false
+        popover.animates = true
+        popover.delegate = self
     }
 
     @objc private func togglePopover() {
         guard let button = item.button else { return }
         if popover.isShown {
             popover.performClose(nil)
-            popoverState.message = nil
         } else {
+            popoverState.isShown = true
             NSApp.activate()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popoverState.isShown = false
+        popoverState.message = nil
+        popoverState.list.reset()
     }
 }

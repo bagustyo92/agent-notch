@@ -81,6 +81,7 @@ public final class Monitor {
                 try? await Task.sleep(for: .seconds(self?.livenessInterval ?? 5))
                 guard let self, !Task.isCancelled else { return }
                 self.store.checkLiveness(now: Date(), isAlive: self.isAlive)
+                self.store.dropStaleSubagents(now: Date())
                 self.locateMissingTranscripts()
                 self.pruneTranscripts()
             }
@@ -174,6 +175,10 @@ public final class Monitor {
             sessionIdByTranscriptPath[url.resolvingSymlinksInPath().path] = nil
             Task { await transcripts.detach(sessionId: id) }
         }
+        for id in transcriptPaths.keys {
+            let dismissed = store.dismissedSubagentIds(sessionId: id)
+            if !dismissed.isEmpty { Task { await transcripts.dropSubagents(sessionId: id, agentIds: dismissed) } }
+        }
         for id in locateRetryAt.keys where !live.contains(id) {
             locateRetryAt[id] = nil
             locateAttempts[id] = nil
@@ -184,8 +189,12 @@ public final class Monitor {
 
     func transcriptAttached(sessionId: String, url: URL) {
         Task { [transcripts, store] in
-            guard let update = await transcripts.attach(sessionId: sessionId, url: url) else { return }
-            store.updateTranscript(id: sessionId, update: update)
+            if let update = await transcripts.attach(sessionId: sessionId, url: url) {
+                store.updateTranscript(id: sessionId, update: update)
+            }
+            // D33: subagents already running when the session (or the app) was first seen.
+            let running = await transcripts.scanSubagents(sessionId: sessionId, directory: SubagentFiles.directory(forTranscript: url), now: Date())
+            for update in running { store.updateSubagent(sessionId: sessionId, update: update, now: Date()) }
         }
     }
 
@@ -193,19 +202,29 @@ public final class Monitor {
     /// is not tracked yet but is named `<known sessionId>.jsonl` is a transcript that just appeared.
     func transcriptsChanged(_ paths: [String]) {
         var ids = Set<String>()
+        var agents: [(sessionId: String, agentId: String, directory: URL)] = []
         for path in paths {
             if let id = sessionIdByTranscriptPath[path] { ids.insert(id); continue }
+            if let sub = SubagentFiles.parse(path: path) {
+                if let session = store.session(id: sub.sessionId), session.status != .done,
+                   !agents.contains(where: { $0.sessionId == sub.sessionId && $0.agentId == sub.agentId }) { agents.append(sub) }
+                continue
+            }
             guard path.hasSuffix(".jsonl") else { continue }
             let candidate = String((path as NSString).lastPathComponent.dropLast(6))
             if transcriptPaths[candidate] == nil, let session = store.session(id: candidate), session.status != .done {
                 track(sessionId: candidate, url: URL(fileURLWithPath: path))
             }
         }
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty || !agents.isEmpty else { return }
         Task { [transcripts, store] in
             for id in ids {
                 guard let update = await transcripts.readNew(sessionId: id) else { continue }
                 store.updateTranscript(id: id, update: update)
+            }
+            for sub in agents {
+                let update = await transcripts.readSubagent(sessionId: sub.sessionId, agentId: sub.agentId, directory: sub.directory)
+                store.updateSubagent(sessionId: sub.sessionId, update: update, now: Date())
             }
         }
     }
@@ -233,6 +252,10 @@ public final class Monitor {
 /// Owns every `TranscriptTail` so all transcript IO happens off the main actor.
 actor TranscriptReader {
     private var tails: [String: TranscriptTail] = [:]
+    /// sessionId → agentId → tail of that subagent's transcript.
+    private var subagentTails: [String: [String: TranscriptTail]] = [:]
+    /// A subagent seen at attach time counts only if its transcript moved this recently.
+    static let subagentAttachWindow: TimeInterval = 1800
 
     func attach(sessionId: String, url: URL) -> TranscriptUpdate? {
         let tail = TranscriptTail(path: url)
@@ -245,5 +268,34 @@ actor TranscriptReader {
         return try? tail.readNew()
     }
 
-    func detach(sessionId: String) { tails[sessionId] = nil }
+    func detach(sessionId: String) {
+        tails[sessionId] = nil
+        subagentTails[sessionId] = nil
+    }
+
+    /// Meta plus new transcript lines of one subagent; the first read scans its whole transcript.
+    func readSubagent(sessionId: String, agentId: String, directory: URL) -> SubagentUpdate {
+        var update = SubagentFiles.readMeta(directory, agentId: agentId)
+        if let tail = subagentTails[sessionId]?[agentId] {
+            update.transcript = try? tail.readNew()
+        } else if update.lastWriteAt != nil {
+            let tail = TranscriptTail(path: SubagentFiles.transcript(directory, agentId: agentId), includeSidechain: true)
+            subagentTails[sessionId, default: [:]][agentId] = tail
+            update.transcript = try? tail.attachFromStart()
+        }
+        return update
+    }
+
+    /// Unfinished subagents whose transcripts moved within `subagentAttachWindow`.
+    func scanSubagents(sessionId: String, directory: URL, now: Date) -> [SubagentUpdate] {
+        SubagentFiles.agentIds(in: directory).compactMap { agentId in
+            let meta = SubagentFiles.readMeta(directory, agentId: agentId)
+            guard !meta.finished, let at = meta.lastWriteAt, now.timeIntervalSince(at) < Self.subagentAttachWindow else { return nil }
+            return readSubagent(sessionId: sessionId, agentId: agentId, directory: directory)
+        }
+    }
+
+    func dropSubagents(sessionId: String, agentIds: Set<String>) {
+        for id in agentIds { subagentTails[sessionId]?[id] = nil }
+    }
 }

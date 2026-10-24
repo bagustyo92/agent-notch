@@ -20,6 +20,13 @@ public enum SessionKind: String, Sendable, Equatable {
     case interactive, background
 }
 
+/// What a working session is doing right now, from its newest transcript line (D29). Claude Code
+/// writes nothing while the model streams a thought, so `thinking` also covers "a tool result or
+/// prompt arrived and no reply has been written yet": the UI shows a rotating verb then.
+public enum Phase: String, Sendable, Equatable {
+    case thinking, tool, writing
+}
+
 /// The activity line in both display modes (D11). Both strings are derived and masked;
 /// the raw tool input or transcript text is never kept (R4).
 public struct Activity: Sendable, Equatable {
@@ -55,6 +62,19 @@ public struct Session: Identifiable, Sendable, Equatable {
     public var endedAt: Date?
     public var claudeVersion: String?
     public var tty: String?
+    /// Newest phase from the transcript (D29); meaningful only while `status == .working`.
+    public var phase: Phase?
+    /// Model id and effort level of the newest assistant line, e.g. `claude-opus-5-5`, `high` (D30).
+    public var model: String?
+    public var effort: String?
+    /// Why a waiting session waits (`dialog open`, `input needed`, …) and Claude Code's own
+    /// one-line `needs` text, masked (D31). The UI hides `needs` under Hide details.
+    public var waitingFor: String?
+    public var needs: String?
+    /// When the last turn finished (working → idle), for the green "Finished" state (D32).
+    public var turnFinishedAt: Date?
+    /// Subagents of the current turn, plus any still running (D33).
+    public var subagents: [Subagent] = []
 
     public init(
         id: String, pid: Int32? = nil, cwd: String, branch: String? = nil, name: String, aiTitle: String? = nil,
@@ -66,5 +86,65 @@ public struct Session: Identifiable, Sendable, Equatable {
         self.kind = kind; self.source = source; self.status = status; self.statusChangedAt = statusChangedAt
         self.activity = activity; self.activityUnavailable = activityUnavailable
         self.startedAt = startedAt; self.endedAt = endedAt; self.claudeVersion = claudeVersion; self.tty = tty
+    }
+}
+
+/// One subagent of a session, from `<sessionId>/subagents/agent-<id>.{jsonl,meta.json}` (D33).
+/// Strings are derived and masked like the session's own.
+public struct Subagent: Identifiable, Sendable, Equatable {
+    public let id: String
+    /// `general-purpose`, `Explore`, … from the meta file.
+    public var agentType: String
+    /// The short task description the parent gave it.
+    public var description: String
+    /// The parent's `Agent` tool_use id; a grandchild's id appears in its parent subagent's
+    /// `spawnedToolUseIds`.
+    public var toolUseId: String?
+    public var spawnDepth: Int
+    public var spawnedToolUseIds: Set<String> = []
+    public var phase: Phase?
+    public var activity: Activity?
+    public var model: String?
+    public var effort: String?
+    public var finished: Bool
+    public var startedAt: Date
+    public var finishedAt: Date?
+    /// Last time its transcript grew; drives the stale sweep.
+    public var lastWriteAt: Date
+
+    public init(
+        id: String, agentType: String, description: String, toolUseId: String? = nil, spawnDepth: Int = 1,
+        phase: Phase? = nil, activity: Activity? = nil, model: String? = nil, effort: String? = nil,
+        finished: Bool = false, startedAt: Date, finishedAt: Date? = nil, lastWriteAt: Date
+    ) {
+        self.id = id; self.agentType = agentType; self.description = description; self.toolUseId = toolUseId
+        self.spawnDepth = spawnDepth; self.phase = phase; self.activity = activity; self.model = model
+        self.effort = effort; self.finished = finished; self.startedAt = startedAt; self.finishedAt = finishedAt
+        self.lastWriteAt = lastWriteAt
+    }
+}
+
+/// One read of a subagent's meta file and transcript, before it is merged into the store.
+public struct SubagentUpdate: Sendable, Equatable {
+    public var agentId: String
+    public var agentType: String
+    public var description: String
+    public var toolUseId: String?
+    public var spawnDepth: Int
+    public var finished: Bool
+    /// Transcript creation and modification times.
+    public var startedAt: Date?
+    public var lastWriteAt: Date?
+    /// Nil when the transcript had nothing new.
+    public var transcript: TranscriptUpdate?
+
+    public init(
+        agentId: String, agentType: String = "Agent", description: String = "", toolUseId: String? = nil,
+        spawnDepth: Int = 1, finished: Bool = false, startedAt: Date? = nil, lastWriteAt: Date? = nil,
+        transcript: TranscriptUpdate? = nil
+    ) {
+        self.agentId = agentId; self.agentType = agentType; self.description = description; self.toolUseId = toolUseId
+        self.spawnDepth = spawnDepth; self.finished = finished; self.startedAt = startedAt; self.lastWriteAt = lastWriteAt
+        self.transcript = transcript
     }
 }
