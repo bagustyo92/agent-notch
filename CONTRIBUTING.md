@@ -54,7 +54,9 @@ shape, make the parser tolerate it, and update the "Verified facts" table in `do
 
 - One topic per PR. Describe what changed and how you checked it (tests, `--dump`, a screenshot).
 - `scripts/test.sh` must pass; CI runs it on every PR.
-- Keep screenshots free of real session titles, file names or anything private.
+- Keep screenshots free of real session titles, file names or anything private. `.build/debug/AgentNotch --demo`
+  replays synthetic sessions in front of a clean backdrop (`--demo dropdown` for the menu bar card); it
+  prints the screen rect to capture, e.g. `screencapture -x -R<rect> shot.png`. Park the mouse away from the notch first.
 
 ## Good first issues
 

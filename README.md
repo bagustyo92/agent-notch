@@ -12,6 +12,18 @@ sends, stops or resumes anything, installs no hooks, and makes no network calls.
 
 > AgentNotch is an independent community project. It is not affiliated with or endorsed by Anthropic.
 
+<p align="center"><img src="docs/media/hero.gif" width="720" alt="AgentNotch: the notch opens a live strip when a session starts or needs you, then expands to every session and its subagents"></p>
+
+## Preview
+
+All media below is a scripted run on synthetic sessions (`AgentNotch --demo`), not real work.
+
+| | |
+|---|---|
+| **Collapsed.** While anything runs, the notch grows a side on each edge: working count on the left, sessions that need you on the right. <br><img src="docs/media/notch-collapsed.png" width="420"> | **Live strip.** The notch opens on its own when a session starts working or needs you. <br><img src="docs/media/live-strip.gif" width="420"> |
+| **Hover for everything.** Every session, its model and effort, and its subagent tree. <br><img src="docs/media/expand-subagents.gif" width="420"> | **Hide details.** Repo, branch and tool name only, for screen sharing. <br><img src="docs/media/hide-details.gif" width="420"> |
+| **Menu bar.** The same rows plus settings, with working and waiting counts in the bar. <br><img src="docs/media/dropdown.png" width="300"> | **Still frames.** <br><img src="docs/media/notch-expanded.png" width="420"> <br><img src="docs/media/notch-live-strip.png" width="420"> |
+
 ## Install
 
 Requirements: macOS 15 or later, Apple silicon, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
@@ -42,22 +54,32 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
 
 ## What you see
 
-- **Notch.** The number of working sessions sits left of the notch; an orange dot on the right
-  means a session is waiting for you. Hover the notch (or click it) to expand the list; move the
-  pointer away to close it. When a session starts waiting or finishes a turn, the notch briefly
-  opens with just that row. Macs without a notch get a small pill at the top of the screen.
+- **Notch.** While anything runs, the notch grows a little on both sides: animated dots and the
+  number of working sessions on the left, an orange count of sessions that need you on the right
+  (or a green check right after a turn finishes). When a session starts working or needs you, the
+  notch opens a compact live strip with just those sessions and their subagents; it stays until you
+  hover it. Hover (or click) for the full list, grouped into **Needs you**, **Working** and
+  **Done**; move the pointer away to close it. Macs without a
+  notch get a small pill at the top of the screen.
 - **Menu bar.** A little bot with two numbers: working on top, waiting below. It turns orange
   when something waits. Click it for the same list plus settings. If you can't see it, macOS may
   be hiding it behind the notch: hold ⌘ and drag it next to the clock.
-- **Each row.** The session's title, then `repo · branch · where it runs · elapsed`, then a
-  one-line summary of the current activity (for example `Edit · Login.swift`).
+- **Each row.** A state mark (blue dots: working, orange hand: needs you, green check: finished,
+  dim dot: idle), the session's title with its model and effort (`Opus 5.5 · high`), then
+  `repo · branch · where it runs · elapsed`, then what it is doing: the tool (`Edit · Login.swift`),
+  a rotating verb while it thinks (`Percolating…`), or what it needs from you.
+- **Subagents.** Listed under their session with their own model, effort and activity. Two show by
+  default; click "+N more" for the whole tree.
 - **Click a row.**
   - Cursor: opens that exact chat tab in its window.
   - VS Code: brings VS Code forward.
   - Terminal: selects the exact tab. The first click asks for permission to control Terminal.
   - Background (`claude --bg`): shows the `claude attach <id>` command to copy; runs nothing.
-- **Hide details** (menu bar dropdown) reduces every row to `repo · branch` and the tool name, for
-  screen sharing.
+- **Settings** (menu bar dropdown):
+  - **Hide details** reduces every row to `repo · branch` and the tool name, for screen sharing.
+  - **Pop open automatically** turns the live strip on or off.
+  - **Show subagents in live view** lists running subagents in the live strip.
+  - **Launch at login.**
 
 Ended sessions show **Done** for 10 minutes, then disappear.
 
@@ -67,17 +89,19 @@ AgentNotch only reads, and only on your Mac:
 
 - the session list from `claude agents --json`, or `~/.claude/sessions/*.json` if that fails;
 - the tail of each session's transcript under `~/.claude/projects/`, to show the current title,
-  branch and a safe activity line;
+  branch, model, effort and a safe activity line;
+- the transcripts and `.meta.json` files of running subagents next to it (type, task description,
+  model, effort, activity);
 - process facts (executable path, terminal, parent process) for the session processes.
 
 It never opens `*.key` files or reads tokens, never shows Bash commands, search patterns, URLs or
 queries, masks anything that looks like a secret, and keeps everything in memory. The only things
-it saves are your two settings. It makes no network connections of any kind.
+it saves are your four settings. It makes no network connections of any kind.
 
 ## Uninstall
 
 Quit it from the menu bar dropdown, switch off **Launch at login** first if you turned it on, then
-delete the app and its two settings:
+delete the app and its settings:
 
 ```sh
 rm -rf /Applications/AgentNotch.app ~/Applications/AgentNotch.app
@@ -86,14 +110,18 @@ defaults delete local.agentnotch
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md);
-the design, hard rules and decisions live in [docs/DESIGN.md](docs/DESIGN.md).
+Bug reports, feature requests and pull requests are welcome. Missing something in your workflow?
+[Open an issue](../../issues/new/choose) and say what you want to do. Want to build it yourself? Start
+with [CONTRIBUTING.md](CONTRIBUTING.md); it lists good first issues (more terminals such as iTerm2,
+Ghostty and WezTerm, VS Code deep links, notarized releases, a Homebrew cask). The design, hard rules
+and decisions live in [docs/DESIGN.md](docs/DESIGN.md).
 
 Handy flags while developing:
 
 ```sh
 .build/debug/AgentNotch --dump          # print the current rows once
 .build/debug/AgentNotch --watch 30      # print row changes with timestamps for 30 s
+.build/debug/AgentNotch --demo          # replay synthetic sessions, for screenshots (--demo dropdown for the menu bar card)
 ```
 
 ## License
