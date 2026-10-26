@@ -92,8 +92,9 @@ struct SessionRowView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 4)
-                    if let capsule = ModelName.capsule(model: session.model, effort: session.effort) {
-                        ModelCapsule(text: capsule)
+                    let context = ContextIndicator.of(session)
+                    if let capsule = ModelName.capsule(model: session.model, effort: session.effort, context: context?.label) {
+                        ModelCapsule(text: capsule, context: context)
                     }
                 }
                 Text(metaLine)
@@ -104,7 +105,7 @@ struct SessionRowView: View {
                 PhaseLine(
                     id: session.id, state: state, activity: session.activity, hideDetails: hideDetails, now: now,
                     waitingFor: session.waitingFor, needs: session.needs, finishedAt: session.turnFinishedAt,
-                    unavailable: session.activityUnavailable
+                    startedAt: session.turnStartedAt, files: session.turnFileCount, unavailable: session.activityUnavailable
                 )
             }
         }
@@ -388,15 +389,25 @@ struct LiveStripView: View {
             let state = DisplayState.of(session, now: now)
             HStack(spacing: 8) {
                 StateBadge(state: state, size: 20)
-                Text(StripLabel.text(for: session, hideDetails: settings.hideDetails))
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                    .contentTransition(.opacity)
-                    .animation(.easeInOut(duration: 0.25), value: session.aiTitle)
+                HStack(spacing: 4) {
+                    Text(StripLabel.text(for: session, hideDetails: settings.hideDetails))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .lineLimit(1)
+                        .contentTransition(.opacity)
+                        .animation(.easeInOut(duration: 0.25), value: session.aiTitle)
+                    if let suffix = StripLabel.contextSuffix(for: session) {
+                        Text(suffix.text)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(suffix.level.color ?? .secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                .layoutPriority(1)
                 PhaseLine(
                     id: session.id, state: state, activity: session.activity, hideDetails: settings.hideDetails, now: now,
-                    waitingFor: session.waitingFor, needs: session.needs, finishedAt: session.turnFinishedAt, size: 12
+                    waitingFor: session.waitingFor, needs: session.needs, finishedAt: session.turnFinishedAt,
+                    startedAt: session.turnStartedAt, files: session.turnFileCount, size: 12
                 )
                 Spacer(minLength: 6)
                 Text(ElapsedFormatter.precise(now.timeIntervalSince(session.statusChangedAt)))

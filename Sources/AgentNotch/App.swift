@@ -108,9 +108,11 @@ enum DebugDump {
         let title = full ? s.title : "(hidden)"
         let activity = (full ? s.activity?.full : s.activity?.brief) ?? (s.activityUnavailable ? "activity unavailable" : "-")
         let model = ModelName.capsule(model: s.model, effort: s.effort) ?? "-"
+        let ctx = ContextIndicator.of(s)?.label ?? "-"
+        let tokens = "\(s.contextTokens.map(String.init) ?? "-")/\(s.contextWindow.map(String.init) ?? "?")"
         let agents = s.subagents.map { "\($0.agentType):\($0.finished ? "done" : $0.phase?.rawValue ?? "-")" }.joined(separator: ",")
         let link = IDEDeepLink.resolve(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt)?.absoluteString ?? "-"
-        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\tlink=\(link)"
+        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\tlink=\(link)"
     }
 
     static func stamp() -> String {

@@ -64,9 +64,9 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
   number of working sessions on the left, an orange count of sessions that need you on the right
   (or a green check right after a turn finishes). When a session starts working or needs you, the
   notch opens a compact live strip with just those sessions and their subagents; it stays until you
-  hover it. Hover (or click) for the full list, grouped into **Needs you**, **Working** and
-  **Done**; move the pointer away to close it. Macs without a
-  notch get a small pill at the top of the screen.
+  hover it. A session close to auto-compact shows `· 81% ctx` there. Hover (or click) for the full
+  list, grouped into **Needs you**, **Working** and **Done**; move the pointer away to close it. Macs
+  without a notch get a small pill at the top of the screen.
 - **Menu bar.** A little bot with the notch's status beside it, only what is live: blue dots and the
   number working, an orange dot and the number that need you, or a green check right after a turn
   finishes. Two of them stack; idle shows the bot alone. The bot turns orange when something waits.
@@ -74,9 +74,12 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
   Click it for the same list plus settings. If you can't see it, macOS may
   be hiding it behind the notch: hold ⌘ and drag it next to the clock.
 - **Each row.** A state mark (blue dots: working, orange hand: needs you, green check: finished,
-  dim dot: idle), the session's title with its model and effort (`Opus 5.5 · high`), then
-  `repo · branch · where it runs · elapsed`, then what it is doing: the tool (`Edit · Login.swift`),
-  a rotating verb while it thinks (`Percolating…`), or what it needs from you.
+  dim dot: idle), the session's title with its model, effort and context use (`Opus 5.5 · high · 62%`,
+  amber as it nears auto-compact and red close to it, or a raw count such as `412k` for a model
+  AgentNotch does not know), then `repo · branch · where it runs · elapsed`, then what it is doing:
+  the tool (`Edit · Login.swift`), a rotating verb while it thinks (`Percolating…`), or what it needs
+  from you. A finished turn reads `Finished 2m ago · 4 files · ran 3m`: the files the session and its
+  subagents edited, and how long the turn ran.
 - **Subagents.** Listed under their session with their own model, effort and activity. Two show by
   default; click "+N more" for the whole tree.
 - **Click a row.**
@@ -98,12 +101,14 @@ AgentNotch only reads, and only on your Mac:
 
 - the session list from `claude agents --json`, or `~/.claude/sessions/*.json` if that fails;
 - the tail of each session's transcript under `~/.claude/projects/`, to show the current title,
-  branch, model, effort and a safe activity line;
+  branch, model, effort, context size and a safe activity line;
 - the transcripts and `.meta.json` files of running subagents next to it (type, task description,
   model, effort, activity);
+- the paths that edit tools name, for the "4 files" count. Only a hash of each path is kept, in
+  memory, for the current turn;
 - process facts (executable path, terminal, parent process) for the session processes.
 
-It never opens `*.key` files or reads tokens and keeps everything in memory. The only things it
+It never opens `*.key` files or reads auth tokens and keeps everything in memory. The only things it
 saves are your four settings. The AgentNotch process makes no network connections.
 
 What it shows: the AI title, the first line of Claude's latest text, and the description of a Bash
@@ -131,7 +136,7 @@ Versions before 0.4.0 used the bundle id `local.agentnotch`; its settings, if an
 Bug reports, feature requests and pull requests are welcome. Missing something in your workflow?
 [Open an issue](../../issues/new/choose) and say what you want to do. Want to build it yourself? Start
 with [CONTRIBUTING.md](CONTRIBUTING.md); it lists good first issues (more terminals such as iTerm2,
-Ghostty and WezTerm, VS Code deep links, notarized releases, a Homebrew cask). The design, hard rules
+Ghostty and WezTerm, notarized releases). The design, hard rules
 and decisions live in [docs/DESIGN.md](docs/DESIGN.md).
 
 Handy flags while developing:

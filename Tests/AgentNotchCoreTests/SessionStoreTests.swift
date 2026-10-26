@@ -269,3 +269,115 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         #expect(store.sessions[0].subagents.isEmpty)
     }
 }
+
+@MainActor
+@Suite struct SessionStoreContext {
+    let store = SessionStore(testedVersion: "2.1.310")
+
+    @Test func tokensAndTheModelResolveTheWindow() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(model: "claude-opus-5-5", contextTokens: 400_000))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(phase: .thinking))       // nil leaves the count
+        let a = store.sessions[0]
+        #expect(a.contextTokens == 400_000)
+        #expect(a.contextWindow == 1_000_000)
+    }
+
+    @Test func unknownModelsHaveNoWindow() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(model: "claude-3-5-haiku-20241022", contextTokens: 90_000))
+        #expect(store.sessions[0].contextTokens == 90_000)
+        #expect(store.sessions[0].contextWindow == nil)
+    }
+
+    @Test func aStandardModelPastTwoHundredThousandRunsWithTheMillionWindowForGood() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(model: "claude-sonnet-4-5-20250929", contextTokens: 150_000))
+        #expect(store.sessions[0].contextWindow == 200_000)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(contextTokens: 230_000))
+        #expect(store.sessions[0].contextWindow == 1_000_000)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(contextTokens: 40_000))   // compacted: still a [1m] session
+        #expect(store.sessions[0].contextWindow == 1_000_000)
+    }
+
+    @Test func subagentTokensStayOffTheSession() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(model: "claude-opus-5-5", contextTokens: 50_000))
+        store.updateSubagent(sessionId: "a", update: SubagentUpdate(agentId: "x", transcript: TranscriptUpdate(model: "claude-haiku-4-5", contextTokens: 190_000)), now: t0)
+        #expect(store.sessions[0].contextTokens == 50_000)
+        #expect(store.sessions[0].contextWindow == 1_000_000)
+    }
+}
+
+@MainActor
+@Suite struct SessionStoreTurnSummary {
+    let store = SessionStore(testedVersion: "2.1.310")
+
+    private func edits(_ paths: String...) -> TranscriptUpdate { TranscriptUpdate(editedPathHashes: paths.map(\.hashValue)) }
+    private func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
+
+    @Test func aTurnCountsDistinctFilesOfTheSessionAndItsSubagents() {
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.replaceList([listed("a", status: "busy")], now: at(10))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/a.swift", "/Users/dev/b.swift"))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/a.swift"))
+        store.updateSubagent(sessionId: "a", update: SubagentUpdate(agentId: "x", transcript: edits("/Users/dev/b.swift", "/Users/dev/c.swift")), now: at(20))
+        store.replaceList([listed("a", status: "idle")], now: at(190))
+        let a = store.sessions[0]
+        #expect(a.turnStartedAt == at(10))
+        #expect(a.turnFinishedAt == at(190))
+        #expect(a.turnFileCount == 3)
+    }
+
+    @Test func answeringAPromptKeepsTheTurn() {
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.replaceList([listed("a", status: "busy")], now: at(10))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/a.swift"))
+        store.replaceList([listed("a", status: "waiting")], now: at(20))
+        store.replaceList([listed("a", status: "busy")], now: at(30))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/b.swift"))
+        store.replaceList([listed("a", status: "idle")], now: at(60))
+        #expect(store.sessions[0].turnStartedAt == at(10))
+        #expect(store.sessions[0].turnFileCount == 2)
+    }
+
+    @Test func aNewTurnStartsFromZero() {
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.replaceList([listed("a", status: "busy")], now: at(10))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/a.swift", "/Users/dev/b.swift"))
+        store.replaceList([listed("a", status: "idle")], now: at(60))
+        store.replaceList([listed("a", status: "busy")], now: at(100))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/a.swift"))
+        store.replaceList([listed("a", status: "idle")], now: at(130))
+        #expect(store.sessions[0].turnStartedAt == at(100))
+        #expect(store.sessions[0].turnFileCount == 1)
+    }
+
+    @Test func editsAfterTheTurnEndsLeaveItsCountAlone() {
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.replaceList([listed("a", status: "busy")], now: at(10))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/a.swift"))
+        store.replaceList([listed("a", status: "idle")], now: at(60))
+        store.updateTranscript(id: "a", update: edits("/Users/dev/z.swift"))
+        #expect(store.sessions[0].turnFileCount == 1)
+    }
+
+    @Test func aTurnThatOnlyWaitedHidesTheLastFinish() {
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.replaceList([listed("a", status: "busy")], now: at(10))
+        store.replaceList([listed("a", status: "idle")], now: at(60))
+        store.replaceList([listed("a", status: "waiting")], now: at(70))     // a prompt, then dismissed
+        store.replaceList([listed("a", status: "idle")], now: at(80))
+        let a = store.sessions[0]
+        #expect(a.turnFinishedAt == nil)
+        #expect(DisplayState.of(a, now: at(81)) == .idle)
+    }
+
+    @Test func aTurnRunningAtLaunchStartsWhenFirstSeen() {
+        store.replaceList([listed("a", status: "busy"), listed("b", status: "waiting")], now: t0)
+        store.replaceList([listed("a", status: "idle"), listed("b", status: "busy")], now: at(45))
+        #expect(store.session(id: "a")?.turnStartedAt == t0)
+        #expect(store.session(id: "a")?.turnFileCount == 0)
+        #expect(store.session(id: "b")?.turnStartedAt == t0)
+    }
+}

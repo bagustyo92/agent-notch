@@ -8,6 +8,9 @@ enum Palette {
     static let working = adaptive(dark: (0.38, 0.70, 1.0), light: (0.0, 0.42, 0.88))
     static let needsYou = Color.orange
     static let finished = adaptive(dark: (0.32, 0.84, 0.47), light: (0.10, 0.56, 0.24))
+    /// Context nearing auto-compact (D38): amber, then red.
+    static let contextWarn = adaptive(dark: (1.0, 0.78, 0.20), light: (0.70, 0.47, 0.0))
+    static let contextCritical = adaptive(dark: (1.0, 0.38, 0.36), light: (0.80, 0.13, 0.11))
 
     /// The notch is always dark; the dropdown follows the system, where light needs deeper tones.
     private static func adaptive(dark: (CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat)) -> Color {
@@ -26,6 +29,17 @@ extension DisplayState {
         case .finished: Palette.finished
         case .idle: .secondary
         case .ended: .gray
+        }
+    }
+}
+
+extension ContextLevel {
+    /// Nil at normal: the context reads like the rest of the capsule.
+    var color: Color? {
+        switch self {
+        case .normal: nil
+        case .warn: Palette.contextWarn
+        case .critical: Palette.contextCritical
         }
     }
 }
@@ -140,12 +154,14 @@ struct ShimmerText: View {
     }
 }
 
-/// `Opus 5.5 · high`, sized to read at a glance (Q6).
+/// `Opus 5.5 · high · 62%`, sized to read at a glance (Q6). Only the trailing context label turns
+/// amber or red (D38).
 struct ModelCapsule: View {
     let text: String
+    var context: ContextIndicator? = nil
 
     var body: some View {
-        Text(text)
+        Text(styled)
             .font(.system(size: 11, weight: .medium, design: .rounded))
             .foregroundStyle(.primary.opacity(0.78))
             .lineLimit(1)
@@ -154,6 +170,14 @@ struct ModelCapsule: View {
             .background(Capsule().fill(Color.primary.opacity(0.09)))
             .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
             .fixedSize()
+    }
+
+    private var styled: AttributedString {
+        var s = AttributedString(text)
+        if let context, let tint = context.level.color, let range = s.range(of: context.label, options: .backwards) {
+            s[range].foregroundColor = tint
+        }
+        return s
     }
 }
 
@@ -168,6 +192,8 @@ struct PhaseLine: View {
     var waitingFor: String? = nil
     var needs: String? = nil
     var finishedAt: Date? = nil
+    var startedAt: Date? = nil
+    var files = 0
     var unavailable = false
     var size: CGFloat = 11.5
 
@@ -186,14 +212,14 @@ struct PhaseLine: View {
                 Text(NeedsLabel.text(waitingFor: waitingFor))
                     .font(.system(size: size, weight: .semibold))
                     .foregroundStyle(Palette.needsYou)
+                    .layoutPriority(1)                  // the detail truncates first
                 if !hideDetails, let needs {
                     Text(needs).font(.system(size: size)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 }
             }
             .lineLimit(1)
         case .finished:
-            let ago = finishedAt.map { " · \(ElapsedFormatter.string(now.timeIntervalSince($0))) ago" } ?? ""
-            Text("Finished\(ago)")
+            Text(FinishedLabel.text(finishedAt: finishedAt, startedAt: startedAt, files: files, now: now))
                 .font(.system(size: size, weight: .medium))
                 .foregroundStyle(Palette.finished.opacity(0.9))
                 .lineLimit(1)

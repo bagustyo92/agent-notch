@@ -18,6 +18,8 @@ final class DemoDriver {
         let model: String
         let effort: String
         let ageMinutes: Double
+        /// Starting context size (D38): one session around 40%, one amber, one red.
+        let contextTokens: Int
         let tools: [String]
     }
 
@@ -28,16 +30,16 @@ final class DemoDriver {
 
     private static let specs = [
         Spec(id: "demo-storefront", pid: 41001, repo: "storefront-web", branch: "feat/checkout-redesign", title: "Redesign the checkout flow",
-             source: .cursor, model: "claude-opus-5-5", effort: "high", ageMinutes: 14,
+             source: .cursor, model: "claude-opus-5-5", effort: "high", ageMinutes: 14, contextTokens: 402_000,
              tools: ["Edit · CheckoutView.swift", "Read · CartSummary.swift", "Edit · PaymentStep.swift", "Bash · run unit tests"]),
         Spec(id: "demo-billing", pid: 41002, repo: "billing-api", branch: "fix/invoice-rounding", title: "Fix invoice rounding",
-             source: .terminal, model: "claude-sonnet-5-5", effort: "medium", ageMinutes: 6,
+             source: .terminal, model: "claude-sonnet-5-5", effort: "medium", ageMinutes: 6, contextTokens: 752_000,
              tools: ["Read · invoice_totals.go", "Edit · rounding.go", "Bash · run go tests"]),
         Spec(id: "demo-infra", pid: 41003, repo: "infra-terraform", branch: "feat/staging-vpc", title: "Add a staging VPC",
-             source: .vscode, model: "claude-opus-5-5", effort: "high", ageMinutes: 31,
+             source: .vscode, model: "claude-opus-5-5", effort: "high", ageMinutes: 31, contextTokens: 912_000,
              tools: ["Write · vpc.tf", "Edit · variables.tf", "Bash · terraform validate"]),
         Spec(id: "demo-docs", pid: nil, repo: "docs-site", branch: "docs/migration-guide", title: "Draft the migration guide",
-             source: .background, model: "claude-haiku-5-5", effort: "low", ageMinutes: 3,
+             source: .background, model: "claude-haiku-5-5", effort: "low", ageMinutes: 3, contextTokens: 118_000,
              tools: ["Read · upgrade-notes.md", "Write · migration.md"]),
     ]
 
@@ -46,6 +48,7 @@ final class DemoDriver {
     private let notch: NotchPanelController?
     private let statusItem: StatusItemController?
     private var states: [String: State] = [:]
+    private var contextTokens: [String: Int] = [:]
     private var tickCount = 0
     /// `--demo menubar <dir>` writes one PNG per state there.
     var snapshotDir: String?
@@ -126,8 +129,10 @@ final class DemoDriver {
 
     private func runDropdown() async {
         seed()
-        set("demo-docs", .busy, phase: .tool, tool: 1)
-        set("demo-docs", .idle)
+        let now = Date()
+        set("demo-docs", .busy, phase: .tool, tool: 0, at: now.addingTimeInterval(-300))   // a finished turn with files
+        set("demo-docs", .busy, phase: .tool, tool: 1, at: now.addingTimeInterval(-200))
+        set("demo-docs", .idle, at: now.addingTimeInterval(-120))
         set("demo-storefront", .busy, phase: .tool, tool: 2)
         spawn("a1", "Explore", "Map the checkout screens", "Grep · checkout", .tool)
         spawn("a2", "general-purpose", "Write tests for totals", "Read · CartSummary.swift", .tool)
@@ -190,19 +195,18 @@ final class DemoDriver {
     // MARK: - Store plumbing
 
     private func seed() {
-        for spec in Self.specs { states[spec.id] = .idle }
+        for spec in Self.specs { states[spec.id] = .idle; contextTokens[spec.id] = spec.contextTokens }
         apply()
         for spec in Self.specs {
             store.setProbe(id: spec.id, source: spec.source, tty: spec.pid == nil ? nil : "ttys003")
             store.updateTranscript(
                 id: spec.id, aiTitle: spec.title, branch: spec.branch, activity: nil, phase: nil,
-                model: spec.model, effort: spec.effort
+                model: spec.model, effort: spec.effort, contextTokens: spec.contextTokens
             )
         }
     }
 
-    private func apply() {
-        let now = Date()
+    private func apply(at now: Date = Date()) {
         let listed = Self.specs.map { spec -> ListedSession in
             var status: String?, state: String?, why: String?, needs: String?
             switch states[spec.id] ?? .idle {
@@ -221,17 +225,19 @@ final class DemoDriver {
         store.replaceList(listed, now: now)
     }
 
-    private func set(_ id: String, _ state: State, phase: Phase? = nil, tool: Int? = nil) {
+    private func set(_ id: String, _ state: State, phase: Phase? = nil, tool: Int? = nil, at now: Date = Date()) {
         states[id] = state
-        apply()
+        apply(at: now)
         guard let spec = Self.specs.first(where: { $0.id == id }) else { return }
         var activity: Activity?
+        var edits: [Int] = []
         if let tool {
             let line = spec.tools[tool % spec.tools.count]
             activity = Activity(full: line, brief: String(line.prefix { $0 != " " }))
+            edits = Self.editedPathHashes(line, repo: spec.repo)
         }
         if phase != nil || activity != nil {
-            store.updateTranscript(id: id, aiTitle: nil, branch: nil, activity: activity, phase: phase)
+            store.updateTranscript(id: id, aiTitle: nil, branch: nil, activity: activity, phase: phase, editedPathHashes: edits)
         }
     }
 
@@ -243,10 +249,18 @@ final class DemoDriver {
             update: SubagentUpdate(
                 agentId: id, agentType: type, description: description, toolUseId: "tu-\(id)", spawnDepth: 1,
                 startedAt: now, lastWriteAt: now,
-                transcript: TranscriptUpdate(activity: activity, phase: phase, model: "claude-sonnet-5-5", effort: "medium")
+                transcript: TranscriptUpdate(activity: activity, phase: phase, model: "claude-sonnet-5-5", effort: "medium",
+                                             editedPathHashes: Self.editedPathHashes(tool, repo: "storefront-web"))
             ),
             now: now
         )
+    }
+
+    /// `Edit · PaymentStep.swift` counts toward the turn summary (D39); reads and commands do not.
+    private static func editedPathHashes(_ line: String, repo: String) -> [Int] {
+        guard line.hasPrefix("Edit · ") || line.hasPrefix("Write · ") else { return [] }
+        let file = line.split(separator: "·").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? line
+        return ["/Users/dev/work/\(repo)/\(file)".hashValue]
     }
 
     private func finishSubagent(_ id: String) {
@@ -258,13 +272,16 @@ final class DemoDriver {
         )
     }
 
-    /// Keep working rows moving: rotate the tool line and the phase.
+    /// Keep working rows moving: rotate the tool line and the phase, and let the context creep up.
     private func tickActivity() {
         tickCount += 1
         for spec in Self.specs {
             guard case .busy = states[spec.id] ?? .idle else { continue }
             let phases: [Phase] = [.tool, .thinking, .tool, .writing]
             set(spec.id, .busy, phase: phases[(tickCount + spec.tools.count) % phases.count], tool: tickCount)
+            let grown = (contextTokens[spec.id] ?? spec.contextTokens) + 1_400
+            contextTokens[spec.id] = grown
+            store.updateTranscript(id: spec.id, aiTitle: nil, branch: nil, activity: nil, contextTokens: grown)
         }
     }
 

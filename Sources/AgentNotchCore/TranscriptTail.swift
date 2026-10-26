@@ -2,15 +2,24 @@ import Foundation
 
 public enum TranscriptRole: Sendable, Equatable { case assistant, user }
 
-/// The per-line facts beyond the activity: phase, model, effort and the `Agent` calls a line
-/// starts (D29, D30, D33).
+/// The per-line facts beyond the activity: phase, model, effort, the `Agent` calls a line starts,
+/// its context size and the files it edits (D29, D30, D33, D38, D39).
 public struct MessageDetails: Sendable, Equatable {
     public var phase: Phase?
     public var model: String?
     public var effort: String?
     public var spawnedToolUseIds: [String] = []
-    public init(phase: Phase? = nil, model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = []) {
+    /// `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` of the reply (D38).
+    public var contextTokens: Int?
+    /// Hashes of the paths that `Edit`, `Write`, `MultiEdit` and `NotebookEdit` calls name (D39).
+    /// The paths themselves are never kept.
+    public var editedPathHashes: [Int] = []
+    public init(
+        phase: Phase? = nil, model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = [],
+        contextTokens: Int? = nil, editedPathHashes: [Int] = []
+    ) {
         self.phase = phase; self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds
+        self.contextTokens = contextTokens; self.editedPathHashes = editedPathHashes
     }
 }
 
@@ -21,8 +30,9 @@ public enum TranscriptLine: Sendable, Equatable {
     case ignored
 }
 
-/// Tolerant JSONL line parser. Reads only `type`, `aiTitle`, `gitBranch`, `isSidechain`, `effort`
-/// and `message.{model,content[].{type,id,name,input,text}}` (F6). Never retains the line.
+/// Tolerant JSONL line parser. Reads only `type`, `aiTitle`, `gitBranch`, `isSidechain`, `effort`,
+/// `message.{model,content[].{type,id,name,input,text}}` and the three input counters of
+/// `message.usage` (F6, F19). Never retains the line.
 public enum TranscriptLineParser {
     /// `includeSidechain` is for subagent transcripts, whose every line is a sidechain (D33).
     public static func parse(_ line: Data, includeSidechain: Bool = false) -> TranscriptLine? {
@@ -47,6 +57,8 @@ public enum TranscriptLineParser {
             details.phase = phase(in: message)
             details.model = token(message?["model"])
             details.spawnedToolUseIds = spawnedToolUseIds(in: message)
+            details.contextTokens = contextTokens(in: message)
+            details.editedPathHashes = editedPathHashes(in: message)
             return .message(role: role, branch: branch, activity: activity(in: message), details: details)
         default:
             return .ignored
@@ -92,6 +104,29 @@ public enum TranscriptLineParser {
         }
     }
 
+    /// The prompt size Claude Code's status line reports (F19). Zero means a `<synthetic>`
+    /// placeholder, not an empty context, so it is dropped.
+    static func contextTokens(in message: [String: Any]?) -> Int? {
+        guard let usage = message?["usage"] as? [String: Any] else { return nil }
+        let keys = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+        let total = keys.reduce(0) { $0 + ContextWindow.clamp((usage[$1] as? Int) ?? 0) }   // R8
+        return total > 0 ? total : nil
+    }
+
+    static let editTools: [String: String] = [
+        "Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path",
+    ]
+
+    static func editedPathHashes(in message: [String: Any]?) -> [Int] {
+        guard let blocks = message?["content"] as? [Any] else { return [] }
+        return blocks.compactMap { block in
+            guard let block = block as? [String: Any], block["type"] as? String == "tool_use",
+                  let name = block["name"] as? String, let key = editTools[name],
+                  let path = (block["input"] as? [String: Any])?[key] as? String, !path.isEmpty else { return nil }
+            return path.hashValue
+        }
+    }
+
     /// Short machine tokens only (model ids, effort levels, tool_use ids). Anything else, including
     /// `<synthetic>` placeholders, is dropped rather than shown.
     static func token(_ any: Any?) -> String? {
@@ -111,13 +146,20 @@ public struct TranscriptUpdate: Sendable, Equatable {
     public var model: String?
     public var effort: String?
     public var spawnedToolUseIds: [String] = []
+    /// The newest reply's context size (D38).
+    public var contextTokens: Int?
+    /// Every edit in this read, oldest first. `attach` leaves it empty: a back-scan cannot tell
+    /// which turn an edit belongs to (D39).
+    public var editedPathHashes: [Int] = []
     public var unavailable: Bool = false
     public init(
         aiTitle: String? = nil, branch: String? = nil, activity: Activity? = nil, phase: Phase? = nil,
-        model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = [], unavailable: Bool = false
+        model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = [], contextTokens: Int? = nil,
+        editedPathHashes: [Int] = [], unavailable: Bool = false
     ) {
         self.aiTitle = aiTitle; self.branch = branch; self.activity = activity; self.phase = phase
-        self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds; self.unavailable = unavailable
+        self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds
+        self.contextTokens = contextTokens; self.editedPathHashes = editedPathHashes; self.unavailable = unavailable
     }
 }
 
@@ -143,7 +185,7 @@ public final class TranscriptTail {
     public var unavailable: Bool { decodeFailures >= Self.unavailableThreshold && decodeSuccesses == 0 }
 
     /// Read backwards in chunks (up to `maxBackscan`) until the latest title, branch, assistant
-    /// activity, phase, model and effort are known. Leaves `offset` at EOF.
+    /// activity, phase, model, effort and context size are known. Leaves `offset` at EOF.
     public func attach() throws -> TranscriptUpdate {
         let handle = try FileHandle(forReadingFrom: path)
         defer { try? handle.close() }
@@ -153,8 +195,8 @@ public final class TranscriptTail {
 
         var found = TranscriptUpdate()
         var haveTitle = false, haveBranch = false, haveActivity = false
-        var havePhase = false, haveModel = false, haveEffort = false
-        var complete: Bool { haveTitle && haveBranch && haveActivity && havePhase && haveModel && haveEffort }
+        var havePhase = false, haveModel = false, haveEffort = false, haveTokens = false
+        var complete: Bool { haveTitle && haveBranch && haveActivity && havePhase && haveModel && haveEffort && haveTokens }
         var carry: [UInt8] = []
         var end = size
         while end > 0, Int(size - end) < maxBackscan, !complete {
@@ -184,6 +226,7 @@ public final class TranscriptTail {
                     if !havePhase, let phase = details.phase { found.phase = phase; havePhase = true }
                     if !haveModel, let model = details.model { found.model = model; haveModel = true }
                     if !haveEffort, let effort = details.effort { found.effort = effort; haveEffort = true }
+                    if !haveTokens, let tokens = details.contextTokens { found.contextTokens = tokens; haveTokens = true }
                 case .ignored, nil:
                     break
                 }
@@ -226,6 +269,8 @@ public final class TranscriptTail {
                 if let model = details.model { update.model = model }
                 if let effort = details.effort { update.effort = effort }
                 update.spawnedToolUseIds += details.spawnedToolUseIds
+                if let tokens = details.contextTokens { update.contextTokens = tokens }
+                update.editedPathHashes += details.editedPathHashes
             case .ignored, nil: break
             }
         }
