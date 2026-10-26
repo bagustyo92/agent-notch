@@ -11,6 +11,9 @@ public enum Status: Int, Sendable, Comparable, CaseIterable {
 
     public static func < (lhs: Status, rhs: Status) -> Bool { lhs.rawValue < rhs.rawValue }
 
+    /// Working or waiting: a turn is in progress.
+    public var isActive: Bool { self == .working || self == .waiting }
+
     /// The "Status mapping" table; see `ListedSession.mappedStatus`.
     public static func from(_ entry: ListedSession) -> Status { entry.mappedStatus }
 }
@@ -73,6 +76,14 @@ public struct Session: Identifiable, Sendable, Equatable {
     public var needs: String?
     /// When the last turn finished (working → idle), for the green "Finished" state (D32).
     public var turnFinishedAt: Date?
+    /// When the current or last turn started: idle or new → working or waiting (D39).
+    public var turnStartedAt: Date?
+    /// Distinct files the last finished turn edited, its subagents' included (D39).
+    public var turnFileCount: Int = 0
+    /// Context size of the newest main-chain reply, and the window it counts against: nil for an
+    /// unknown model (D38).
+    public var contextTokens: Int?
+    public var contextWindow: Int?
     /// Subagents of the current turn, plus any still running (D33).
     public var subagents: [Subagent] = []
 

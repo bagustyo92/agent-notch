@@ -199,3 +199,65 @@ private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
         #expect(StripLabel.text(for: session(title: "Fix invoice rounding"), hideDetails: true) == "repo-a")
     }
 }
+
+@Suite struct ContextIndicators {
+    private func session(_ status: Status, tokens: Int?, window: Int?) -> Session {
+        var s = Session(id: "a", cwd: "/Users/dev/a", name: "a", status: status, statusChangedAt: t0, startedAt: t0)
+        s.contextTokens = tokens
+        s.contextWindow = window
+        return s
+    }
+
+    @Test func liveAndIdleSessionsShowTheirContext() {
+        for status in [Status.working, .waiting, .idle] {
+            #expect(ContextIndicator.of(session(status, tokens: 620_000, window: 1_000_000)) == ContextIndicator(label: "62%", level: .normal))
+        }
+    }
+
+    @Test func doneSessionsAndSessionsWithoutAReplyShowNone() {
+        #expect(ContextIndicator.of(session(.done, tokens: 620_000, window: 1_000_000)) == nil)
+        #expect(ContextIndicator.of(session(.working, tokens: nil, window: 1_000_000)) == nil)
+    }
+
+    @Test func unknownModelsShowARawCountUncolored() {
+        #expect(ContextIndicator.of(session(.working, tokens: 412_345, window: nil)) == ContextIndicator(label: "412k", level: .normal))
+    }
+
+    @Test func capsuleAppendsTheContext() {
+        #expect(ModelName.capsule(model: "claude-opus-5-5", effort: "high", context: "62%") == "Opus 5.5 · high · 62%")
+        #expect(ModelName.capsule(model: "claude-opus-5-5", effort: nil, context: "412k") == "Opus 5.5 · 412k")
+        #expect(ModelName.capsule(model: nil, effort: nil, context: "62%") == "62%")
+        #expect(ModelName.capsule(model: "claude-opus-5-5", effort: "high", context: nil) == "Opus 5.5 · high")
+    }
+
+    @Test func stripSuffixOnlyWhenAmberOrRed() {
+        let amber = StripLabel.contextSuffix(for: session(.working, tokens: 810_000, window: 1_000_000))
+        #expect(amber?.text == "· 81% ctx")
+        #expect(amber?.level == .warn)
+        let red = StripLabel.contextSuffix(for: session(.waiting, tokens: 920_000, window: 1_000_000))
+        #expect(red?.text == "· 92% ctx")
+        #expect(red?.level == .critical)
+        #expect(StripLabel.contextSuffix(for: session(.working, tokens: 700_000, window: 1_000_000)) == nil)
+        #expect(StripLabel.contextSuffix(for: session(.working, tokens: 900_000, window: nil)) == nil)
+        #expect(StripLabel.contextSuffix(for: session(.done, tokens: 920_000, window: 1_000_000)) == nil)
+    }
+}
+
+@Suite struct FinishedLabels {
+    private let finished = t0.addingTimeInterval(-120)
+    private let started = t0.addingTimeInterval(-300)
+
+    @Test func filesAndRunTime() {
+        #expect(FinishedLabel.text(finishedAt: finished, startedAt: started, files: 4, now: t0) == "Finished 2m ago · 4 files · ran 3m")
+        #expect(FinishedLabel.text(finishedAt: finished, startedAt: started, files: 1, now: t0) == "Finished 2m ago · 1 file · ran 3m")
+    }
+
+    @Test func noEditsDropsTheFileCount() {
+        #expect(FinishedLabel.text(finishedAt: finished, startedAt: started, files: 0, now: t0) == "Finished 2m ago · ran 3m")
+    }
+
+    @Test func unknownStartOrFinishDropsThoseParts() {
+        #expect(FinishedLabel.text(finishedAt: finished, startedAt: nil, files: 2, now: t0) == "Finished 2m ago · 2 files")
+        #expect(FinishedLabel.text(finishedAt: nil, startedAt: started, files: 0, now: t0) == "Finished")
+    }
+}

@@ -60,6 +60,12 @@ public enum StripLabel {
         return short.isEmpty ? session.repo : short
     }
 
+    /// `· 81% ctx` after the name, only when the context is amber or red (D38).
+    public static func contextSuffix(for session: Session) -> (text: String, level: ContextLevel)? {
+        guard let context = ContextIndicator.of(session), context.level != .normal else { return nil }
+        return ("· \(context.label) ctx", context.level)
+    }
+
     /// Cut at a word boundary, ending in `…`; a first word longer than the cap is cut hard.
     static func shorten(_ title: String, limit: Int = maxLength) -> String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,14 +100,23 @@ public enum ModelName {
         return version.isEmpty ? family : "\(family) \(version.joined(separator: "."))"
     }
 
-    /// `Opus 5.5 · high`; nil when neither is known.
-    public static func capsule(model: String?, effort: String?) -> String? {
-        switch (model.map(display), effort) {
-        case let (m?, e?): "\(m) · \(e)"
-        case let (m?, nil): m
-        case let (nil, e?): e
-        case (nil, nil): nil
-        }
+    /// `Opus 5.5 · high · 62%`; nil when none is known. The context label comes from
+    /// `ContextIndicator` (D38).
+    public static func capsule(model: String?, effort: String?, context: String? = nil) -> String? {
+        let parts = [model.map(display), effort, context].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// The finished-turn line: `Finished 2m ago · 4 files · ran 3m` (D39). Counts only, so Hide
+/// details shows it as is.
+public enum FinishedLabel {
+    public static func text(finishedAt: Date?, startedAt: Date?, files: Int, now: Date) -> String {
+        guard let finishedAt else { return "Finished" }
+        var parts = ["Finished \(ElapsedFormatter.string(now.timeIntervalSince(finishedAt))) ago"]
+        if files > 0 { parts.append("\(files) file\(files == 1 ? "" : "s")") }
+        if let startedAt { parts.append("ran \(ElapsedFormatter.string(finishedAt.timeIntervalSince(startedAt)))") }
+        return parts.joined(separator: " · ")
     }
 }
 

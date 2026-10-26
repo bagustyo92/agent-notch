@@ -2,7 +2,7 @@
 
 # AgentNotch — design and implementation plan
 
-- Status: v0.2. M1–M6 implemented and released as open source (see "M0 results"); the M7 soak is still open.
+- Status: v0.5. M1–M6 implemented and released as open source (see "M0 results"); the M7 soak is still open. 0.5.0 adds the context indicator and the turn summary (D38–D40).
 - Origin: a personal tool, built for one user on one Mac, now open source.
 - Baseline: Claude Code 2.1.310, macOS 27, a notched MacBook Pro.
 - Source of decisions: a design Q&A on 2026-10-24 (Q-n → D-n). Change a decision with a PR that edits this file and says why.
@@ -62,7 +62,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D25 | **Terminal.app focus:** select the exact window and tab through AppleScript. This needs a one-time macOS Automation permission. If the owner denies it, just activate Terminal. |
 | D26 | This document lives in the repo and is the spec. |
 | D27 | **IDE (Cursor / VS Code) click, fallback:** activate the app by bundle id (F8). No Accessibility permission. Never run `open -a <IDE> <cwd>`: with a multi-root workspace (F7), opening one folder may open a new window. Superseded for Cursor by D28 whenever the window id is known. |
-| D28 | **Cursor click opens the exact chat** (2026-10-24): send `cursor://anthropic.claude-code/open?session=<id>&windowId=<n>`, where `<n>` comes from the session's parent process title (F18). The extension reveals the tab or sidebar that holds the session. Before sending, the pid must be alive, still classify as Cursor's `claude`, have started within 120 s of the session's `startedAt`, and have a live parent inside `Cursor.app`; otherwise fall back to D27. The link is never sent without `windowId`: in a window that does not hold the session, the extension would open a new tab and resume it, a second process on a live session (R1). VS Code stays on D27 until its `windowId` routing is verified. |
+| D28 | **Cursor click opens the exact chat** (2026-10-24): send `cursor://anthropic.claude-code/open?session=<id>&windowId=<n>`, where `<n>` comes from the session's parent process title (F18). The extension reveals the tab or sidebar that holds the session. Before sending, the pid must be alive, still classify as Cursor's `claude`, have started within 120 s of the session's `startedAt`, and have a live parent inside `Cursor.app`; otherwise fall back to D27. The link is never sent without `windowId`: in a window that does not hold the session, the extension would open a new tab and resume it, a second process on a live session (R1). VS Code stays on D27 (2026-10-26): its extension-host title has no `[<windowId>-<n>]`, its `URLHandlerRouter` matches `windowId` by an unanchored regex, and extension 2.1.235 resumes a sidebar-held session in a new panel. |
 
 ### 0.3.0 decisions (2026-10-24, second grilling round)
 
@@ -76,7 +76,7 @@ tool while Claude Code's own spinner moved.
 | D29 | **Phase.** Every session and subagent tracks the phase of its newest transcript line: `thinking` (a thinking block, or a prompt / tool result not yet answered), `tool` (tool_use), `writing` (text). While thinking, the row shows a rotating verb from AgentNotch's own list ("Percolating…"), picked per session every 4 s; Claude Code's spinner text is not on disk. |
 | D30 | **Model and effort** come from `message.model` and the line's `effort` field, shown as a capsule `Opus 5.5 · high` on every row and subagent row (not in the collapsed notch). Only short machine tokens are accepted; `<synthetic>` and anything else is dropped. |
 | D31 | **Needs you** uses the registry's `waitingFor` (values in the 2.1.310 binary: `dialog open`, `input needed`, `sandbox request`, `goal proposal`) for the label ("Needs a decision", "Needs your input", …) and its `needs` text, masked, as detail. Hide details drops the `needs` text. |
-| D32 | **Five display states**, one color and one motion each: working (blue, three rising dots, shimmering verb), needs you (orange, breathing glow), finished turn (green check, "Finished · 2m ago" for 10 min), idle (dim dot), ended (grey). Motion honors Reduce Motion. |
+| D32 | **Five display states**, one color and one motion each: working (blue, three rising dots, shimmering verb), needs you (orange, breathing glow), finished turn (green check and the D39 summary, `Finished 2m ago · 4 files · ran 3m`, for 10 min), idle (dim dot), ended (grey). Motion honors Reduce Motion. |
 | D33 | **Subagents** are child rows, read from `<sessionId>/subagents/agent-<id>.{jsonl,meta.json}` (meta: `agentType`, `description`, `toolUseId`, `spawnDepth`, `finished`). Grandchildren nest under the subagent whose transcript holds their `toolUseId`; two levels are drawn. Two children show per session, then "+N more" expands the whole tree. Finished children fold away when the parent's turn ends; unfinished ones whose transcript is quiet for 30 min (3 min once the parent is idle) are dropped. They do not count in the notch number. |
 | D34 | **Look.** Dynamic-Island black for the notch with spring morphs between shapes; the dropdown keeps the system material and follows light/dark. Raised row cards, SF Symbols, rounded numerals, no text chips. |
 | D35 | **Live strip** (replaces the D13 pulse). When a session starts working or needs you, the collapsed notch opens a compact strip: one line per live session (at most 3, then "+N more") with time in the current state, plus running subagents when "Show subagents in live view" is on. It stays until the pointer hovers it (that acknowledges it) and reopens on the next transition. A finished turn shows for 4 s. Answering a prompt does not reopen it; the first list after launch does not open it. "Pop open automatically" switches the strip off; the collapsed notch still animates. |
@@ -85,6 +85,16 @@ tool while Claude Code's own spinner moved.
 | D37 | **Identity.** The hover view opens with the same header as the dropdown: bot glyph and "AgentNotch" on the left, the live summary on the right. The collapsed notch and the live strip stay unbranded. |
 
 Fix (0.3.0): a collapsed side with nothing to show had zero width, which slid the working count under the physical notch. Each side now keeps a fixed-width base. Verified by capturing the running panel's own view.
+
+### 0.5.0 decisions (2026-10-26)
+
+Both features are derived in memory from transcripts already tailed. Nothing new is read, written or persisted; R1–R5 are unchanged.
+
+| # | Decision |
+|---|---|
+| D38 | **Context indicator.** <br>• Tokens: `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` from `message.usage` of the newest main-chain assistant line (F19). All-zero usage (`<synthetic>` lines) is dropped and the previous value stays. <br>• Window: the F20 table, matched by the longest id prefix that ends on an id boundary (`-`, `[` or the end), so `claude-opus-4-1` never matches `claude-opus-4-10`. A `[1m]` suffix selects 1M. A 200k model whose tokens pass 200 000 switches that session to 1M for good; compaction does not switch it back. <br>• Shown: `round(tokens / window × 100)`, clamped 0–100, the formula of Claude Code's status line (F21). <br>• Color by `tokens / (window − 33 000)`: ≥ 0.75 amber, ≥ 0.90 red. <br>• Unknown model: the raw count (`412k`), no %, no color. <br>• Row: appended to the model capsule, `Opus 5.5 · high · 62%`; only that part is colored. Live strip: `· 81% ctx` after the session name, colored, only when amber or red. <br>• Working, waiting and idle sessions; hidden on done sessions and on subagent rows; shown under Hide details. `--dump` prints `ctx=<label>`, `tokens=<n>/<window or ?>` and the last turn's `files=<n>`. |
+| D39 | **Turn summary.** The Finished line reads `Finished 2m ago · 4 files · ran 3m`, or `Finished 2m ago · ran 3m` with no edits, in rows (10 min) and the live strip (4 s). Counts only, so Hide details shows it. <br>• Files: distinct `file_path` / `notebook_path` of `Edit`, `Write`, `MultiEdit` and `NotebookEdit` in the session **and its subagents** during the turn. Kept as an in-memory set of path hashes per session, never the paths. <br>• A turn starts on idle or new → working or waiting (a session first seen waiting starts its turn then); waiting → working continues it. Starting clears the set and the last turn's finish, so a turn that only waits and then goes idle shows Idle; working → idle freezes the count. <br>• Ran: `turnFinishedAt − turnStartedAt`. <br>• Known limits: Bash edits (sed, git) are not counted. The main transcript's attach back-scan counts no edits, so a turn already running at app launch counts only the session's edits read after attach (a subagent already running then is read from its start, so its earlier edits count), and its `ran` starts when the session was first seen. |
+| D40 | **Plan-usage bar: deferred.** `~/.claude.json` `cachedUsageUtilization` refreshes only when Claude Code fetches usage, so it is usually stale; the status line gets live `rate_limits` on stdin. Next step: verify the status line runs in the Cursor extension, then consider an opt-in status-line bridge. A bridge touches R2, so it needs its own decision here first. |
 
 ## Verified facts (2026-10-24)
 
@@ -136,6 +146,9 @@ Extra facts found while implementing:
 | F16 | `claude agents --json` carries no `version`; the app reads `~/.claude/sessions/<pid>.json` once per new session for the version line (D24). |
 | F17 | Live transcript lines also carry `thinking` blocks and `api-request*`, `attachment`, `last-prompt` types; all ignored. `tool_use.input` for Bash has `command` and `description`. |
 | F18 | **IDE window id:** an extension-session `claude` process is a child of its window's extension host, whose title (`ps -o args=`) is `<App> Helper (Plugin): extension-host (user) <workspace> [<windowId>-<n>]`; Cursor builds it as `[${responseWindowId}-…]`. Cursor's main-process `URLHandlerRouter` routes a URI with `windowId=<n>` to window `<n>`. The extension's URI handler `/open?session=<id>` calls `primaryEditor.open`, which reveals an existing panel or sidebar for that session. Live check: opening the link for a live session revealed its tab and started no new process. | Cursor `main.js`, extension `extension.js`, `ps`, `pgrep` |
+| F19 | **Usage:** assistant transcript lines carry `message.usage` with `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` and `output_tokens`. The context size is the sum of the three input counters. `<synthetic>` lines carry zeroed usage. |
+| F20 | **Context windows** (Claude Code 2.1.310), by model id prefix: <br>• 1 000 000: `claude-opus-5`, `claude-fable-5`, `claude-sonnet-5`, `claude-haiku-5-5`, `claude-opus-4-7`, `claude-opus-4-8`. <br>• 200 000: `claude-opus-4-0`, `claude-opus-4-1`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-sonnet-4`, `claude-haiku-4-5`. |
+| F21 | **Compaction:** Claude Code auto-compacts at `window − 33 000` tokens. Its status line shows `round(tokens / window × 100)`. |
 
 ## Architecture
 
@@ -148,6 +161,7 @@ agent-notch/
     RegistryReader.swift        // fallback: decode ~/.claude/sessions/*.json (skip *.key)
     ProcessProbe.swift          // pid alive (kill(pid,0)), exe path (proc_pidpath) → Source, tty
     TranscriptTail.swift        // offset tail + tolerant line parser
+    ContextWindow.swift         // model → context window, %, amber/red level (D38, F20)
     ActivitySummary.swift       // tool_use/text → safe one-liner, secret mask, hide-details
     SessionStore.swift          // @MainActor @Observable: merge, status, linger, attention events, counts
     FileWatcher.swift           // FSEvents wrapper (kFSEventStreamCreateFlagFileEvents)
@@ -389,7 +403,6 @@ The upgrade path, should it ever be needed: use the Accessibility permission to 
 
 ## Out of scope for v1
 
-- Subagent rows (v2)
 - Cloud and remote sessions
 - Notification banners or sound
 - Any control action

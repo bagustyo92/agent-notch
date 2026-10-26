@@ -53,6 +53,50 @@ private func line(_ s: String) -> Data { Data(s.utf8) }
         #expect(TranscriptLineParser.parse(line(#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub"}]}}"#)) == .ignored)
     }
 
+    @Test func usageGivesTheContextTokens() {
+        let parsed = TranscriptLineParser.parse(line(#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":6,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":900},"content":[{"type":"text","text":"x"}]}}"#))
+        guard case .message(_, _, _, let details) = parsed else { Issue.record("not a message"); return }
+        #expect(details.contextTokens == 41_206)          // output_tokens is not context yet
+    }
+
+    @Test func noUsageOrAllZeroUsageGivesNoTokens() {
+        let none = TranscriptLineParser.parse(line(#"{"type":"assistant","message":{"content":[{"type":"text","text":"x"}]}}"#))
+        guard case .message(_, _, _, let a) = none else { Issue.record("not a message"); return }
+        #expect(a.contextTokens == nil)
+        // Claude Code's `<synthetic>` placeholders carry zeroed usage.
+        let synthetic = TranscriptLineParser.parse(line(#"{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"x"}]}}"#))
+        guard case .message(_, _, _, let b) = synthetic else { Issue.record("not a message"); return }
+        #expect(b.contextTokens == nil)
+    }
+
+    @Test func userLinesCarryNoTokensOrEdits() {
+        let parsed = TranscriptLineParser.parse(line(#"{"type":"user","message":{"usage":{"input_tokens":5},"content":[{"type":"tool_result","content":"ok"}]}}"#))
+        #expect(parsed == .message(role: .user, branch: nil, activity: nil, details: MessageDetails(phase: .thinking)))
+    }
+
+    @Test(arguments: [
+        (#"{"type":"tool_use","name":"Edit","input":{"file_path":"/Users/dev/a.swift","old_string":"x","new_string":"y"}}"#, "/Users/dev/a.swift"),
+        (#"{"type":"tool_use","name":"Write","input":{"file_path":"/Users/dev/b.md","content":"z"}}"#, "/Users/dev/b.md"),
+        (#"{"type":"tool_use","name":"MultiEdit","input":{"file_path":"/Users/dev/c.go","edits":[]}}"#, "/Users/dev/c.go"),
+        (#"{"type":"tool_use","name":"NotebookEdit","input":{"notebook_path":"/Users/dev/d.ipynb","new_source":"q"}}"#, "/Users/dev/d.ipynb"),
+    ])
+    func editToolsRecordAHashOfThePath(block: String, path: String) {
+        let parsed = TranscriptLineParser.parse(line(#"{"type":"assistant","message":{"content":["# + block + #"]}}"#))
+        guard case .message(_, _, _, let details) = parsed else { Issue.record("not a message"); return }
+        #expect(details.editedPathHashes == [path.hashValue])
+    }
+
+    @Test func nonEditToolsRecordNoEdits() {
+        let parsed = TranscriptLineParser.parse(line(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/Users/dev/a.swift"}},{"type":"tool_use","name":"Bash","input":{"command":"sed -i x /Users/dev/a.swift"}}]}}"#))
+        guard case .message(_, _, _, let details) = parsed else { Issue.record("not a message"); return }
+        #expect(details.editedPathHashes.isEmpty)
+    }
+
+    @Test func sidechainEditsAndUsageStayOffTheMainTail() {
+        let parsed = TranscriptLineParser.parse(line(#"{"type":"assistant","isSidechain":true,"message":{"usage":{"input_tokens":9000},"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/Users/dev/a.swift"}}]}}"#))
+        #expect(parsed == .ignored)
+    }
+
     @Test func unknownTypesAreIgnoredNotFailures() {
         #expect(TranscriptLineParser.parse(line(#"{"type":"atis-latch","value":1}"#)) == .ignored)
         #expect(TranscriptLineParser.parse(line(#"{"type":"brand-new-type","payload":{}}"#)) == .ignored)
@@ -92,6 +136,34 @@ private func line(_ s: String) -> Data { Data(s.utf8) }
         #expect(snap.effort == "high")
         #expect(snap.phase == .thinking)
         #expect(snap.activity?.full == "Bash · Run")
+    }
+
+    @Test func attachKeepsTheNewestContextTokensButNoEdits() throws {
+        let url = try tempFile([
+            #"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3,"cache_read_input_tokens":1000},"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/Users/dev/old.swift"}}]}}"#,
+            #"{"type":"assistant","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":2000},"content":[{"type":"text","text":"a"}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"text","text":"next"}]}}"#,
+        ].joined(separator: "\n") + "\n")
+        let snap = try TranscriptTail(path: url).attach()
+        #expect(snap.contextTokens == 2005)
+        #expect(snap.editedPathHashes.isEmpty)       // edits before launch belong to no turn we saw start
+    }
+
+    @Test func readNewCarriesTheLatestTokensAndEveryEdit() throws {
+        let url = try tempFile()
+        let tail = TranscriptTail(path: url)
+        _ = try tail.attach()
+        let h = FileHandle(forWritingAtPath: url.path)!
+        h.seekToEndOfFile()
+        h.write(Data(([
+            #"{"type":"assistant","message":{"usage":{"input_tokens":100},"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/Users/dev/a.swift"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#,
+            #"{"type":"assistant","message":{"usage":{"input_tokens":250},"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/Users/dev/b.swift"}}]}}"#,
+        ].joined(separator: "\n") + "\n").utf8))
+        h.closeFile()
+        let update = try tail.readNew()
+        #expect(update?.contextTokens == 250)
+        #expect(update?.editedPathHashes == ["/Users/dev/a.swift".hashValue, "/Users/dev/b.swift".hashValue])
     }
 
     @Test func readNewTracksThePhaseOfTheNewestLine() throws {

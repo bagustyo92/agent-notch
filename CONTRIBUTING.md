@@ -49,6 +49,8 @@ New behaviour goes into Core behind a small public function first, with a test, 
 The session registry and transcript formats are internal to Claude Code and change between
 versions. When something breaks after an update, add a synthetic fixture that reproduces the new
 shape, make the parser tolerate it, and update the "Verified facts" table in `docs/DESIGN.md`.
+When Claude Code adds a model, update the model table in `Sources/AgentNotchCore/ContextWindow.swift`
+and F20 in `docs/DESIGN.md`.
 
 ## Pull requests
 
@@ -62,9 +64,9 @@ shape, make the parser tolerate it, and update the "Verified facts" table in `do
 
 ## Good first issues
 
-- Verify VS Code routes `windowId=` deep links, then enable it in `IDEDeepLink` (see D28).
-- Child rows for subagents (v2 in the design).
 - iTerm2, Ghostty and WezTerm tab focus.
+- VS Code deep links to the exact chat in `IDEDeepLink`. Blocked: VS Code's window routing is not safe
+  to target yet (see D28).
 
 ## Releasing
 

@@ -57,6 +57,10 @@ public final class SessionStore {
     @ObservationIgnored private var lastAttentionAt: [String: Date] = [:]
     /// Finished subagents folded away at the end of their parent's turn; never re-added (Q22).
     @ObservationIgnored private var dismissedSubagents: [String: Set<String>] = [:]
+    /// Path hashes edited in each session's current turn, its subagents' included (D39). Never paths.
+    @ObservationIgnored private var turnEdits: [String: Set<Int>] = [:]
+    /// Sessions whose 200k model went past 200k tokens: they run with the 1M window (`[1m]`, D38).
+    @ObservationIgnored private var extendedContext: Set<String> = []
     /// The first list only seeds the store: launching the app must not pop the notch open.
     @ObservationIgnored private var hasListed = false
 
@@ -103,6 +107,7 @@ public final class SessionStore {
                 )
                 if status == .done { fresh.endedAt = now }
                 if status == .waiting { fresh.waitingFor = entry.waitingFor; fresh.needs = entry.needs }
+                if status.isActive { startTurn(&fresh, now: now) }
                 byId[entry.sessionId] = fresh
                 if hasListed, status == .working { fireAttention(fresh, .started, now: now) }
                 if hasListed, status == .waiting { fireAttention(fresh, .needsYou, now: now) }
@@ -129,7 +134,8 @@ public final class SessionStore {
     /// cannot blank the activity.
     public func updateTranscript(
         id: String, aiTitle: String?, branch: String?, activity: Activity?, phase: Phase? = nil,
-        model: String? = nil, effort: String? = nil, unavailable: Bool = false
+        model: String? = nil, effort: String? = nil, contextTokens: Int? = nil, editedPathHashes: [Int] = [],
+        unavailable: Bool = false
     ) {
         guard var s = byId[id] else { return }
         if let aiTitle { s.aiTitle = aiTitle }
@@ -138,6 +144,9 @@ public final class SessionStore {
         if let phase { s.phase = phase }
         if let model { s.model = model }
         if let effort { s.effort = effort }
+        if let contextTokens { s.contextTokens = contextTokens }
+        s.contextWindow = resolveContextWindow(id: id, model: s.model, tokens: s.contextTokens)
+        if !editedPathHashes.isEmpty { turnEdits[id, default: []].formUnion(editedPathHashes) }
         s.activityUnavailable = unavailable
         byId[id] = s
         publish()
@@ -146,7 +155,8 @@ public final class SessionStore {
     /// Convenience for the monitor: apply one tail read.
     public func updateTranscript(id: String, update: TranscriptUpdate) {
         updateTranscript(id: id, aiTitle: update.aiTitle, branch: update.branch, activity: update.activity, phase: update.phase,
-                         model: update.model, effort: update.effort, unavailable: update.unavailable)
+                         model: update.model, effort: update.effort, contextTokens: update.contextTokens,
+                         editedPathHashes: update.editedPathHashes, unavailable: update.unavailable)
     }
 
     /// Merge one subagent read (D33). Folded-away finished subagents stay away.
@@ -168,6 +178,7 @@ public final class SessionStore {
             if let model = read.model { agent.model = model }
             if let effort = read.effort { agent.effort = effort }
             agent.spawnedToolUseIds.formUnion(read.spawnedToolUseIds)
+            if !read.editedPathHashes.isEmpty { turnEdits[sessionId, default: []].formUnion(read.editedPathHashes) }   // the parent's turn (D39)
         }
         if update.finished, !agent.finished { agent.finished = true; agent.finishedAt = now }
         if let i = s.subagents.firstIndex(where: { $0.id == agent.id }) { s.subagents[i] = agent } else { s.subagents.append(agent) }
@@ -209,6 +220,8 @@ public final class SessionStore {
             if let endedAt = session.endedAt, now.timeIntervalSince(endedAt) >= lingerDuration {
                 byId[id] = nil
                 dismissedSubagents[id] = nil
+                turnEdits[id] = nil
+                extendedContext.remove(id)
                 lastAttentionAt = lastAttentionAt.filter { !$0.key.hasPrefix("\(id)|") }
             }
         }
@@ -222,8 +235,10 @@ public final class SessionStore {
         session.statusChangedAt = now
         if status == .done { session.endedAt = now }
         if status != .waiting { session.waitingFor = nil; session.needs = nil }
+        if status.isActive, !previous.isActive { startTurn(&session, now: now) }
         if previous == .working, status == .idle || status == .done {
             session.turnFinishedAt = status == .idle ? now : nil
+            session.turnFileCount = turnEdits[session.id]?.count ?? 0
             // Q22: finished subagents fold away with the turn; a killed session drops them all.
             let gone = session.subagents.filter { status == .done || $0.finished }
             dismissedSubagents[session.id, default: []].formUnion(gone.map(\.id))
@@ -236,6 +251,24 @@ public final class SessionStore {
         case .idle where previous == .working: fireAttention(session, .finished, now: now)
         default: break
         }
+    }
+
+    /// A turn starts when a session goes from idle (or unseen) to working or waiting; answering a
+    /// prompt (waiting → working) continues it. The last turn's finish goes with it (D39).
+    private func startTurn(_ session: inout Session, now: Date) {
+        session.turnStartedAt = now
+        session.turnFinishedAt = nil
+        session.turnFileCount = 0
+        turnEdits[session.id] = nil
+    }
+
+    /// The model's window, or 1M once a 200k model has gone past 200k tokens in this session (D38).
+    /// Records that switch, so it outlives compaction.
+    private func resolveContextWindow(id: String, model: String?, tokens: Int?) -> Int? {
+        guard let window = ContextWindow.window(forModel: model) else { return nil }
+        guard window == ContextWindow.standard else { return window }
+        if let tokens, tokens > window { extendedContext.insert(id) }
+        return extendedContext.contains(id) ? ContextWindow.oneMillion : window
     }
 
     /// At most one event per session and kind per `attentionInterval`.
