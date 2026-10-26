@@ -54,7 +54,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D17 | Freshness within 1 s, idle CPU below 1%, tail-only reads (R7). |
 | D18 | **Repo:** a standalone Swift package. Synthetic fixtures only (R6). |
 | D19 | **Build from scratch** as a Swift package with no hooks. Forks rejected after a source audit of vibe-notch@10f1d24 and coucou@47d1c2d. Reasons: <br>• Both block sessions through PermissionRequest hooks (waits of up to 300 s and 118 s). <br>• vibe-notch ships Mixpanel (keyed by hardware UUID) plus Sparkle. <br>• coucou shows one pill per host app and carries about 40 integrations plus an iPhone relay. <br>• Neither focuses a specific window. <br>• Neither sees sessions that were already running when the app launched. <br>• Both need Xcode. |
-| D20 | **Menu bar item:** icon plus two stacked small numbers, **working** on top and **waiting** below. The icon tints orange when waiting > 0. |
+| D20 | **Menu bar item:** the icon plus the notch's collapsed sides, live states only: **working** (dots and count), then **waiting** (orange dot and count) or a green check for a just-finished turn. Two live rows stack; one sits centred; idle is the icon alone. The icon tints orange when waiting > 0. |
 | D21 | **Division of work:** the notch is the live view. The menu bar dropdown shows the **same rows** plus the controls: Hide details, Pop open automatically, Show subagents in live view, Launch at login, version line, Quit. Both render from one in-memory `SessionStore`. |
 | D22 | **Names:** app `AgentNotch`, directory `agent-notch`, bundle id `com.bagustyo92.agentnotch`. |
 | D23 | **Session list source:** `claude agents --json`, run only when `~/.claude/sessions/` changes, debounced to 300 ms. Fall back to reading `~/.claude/sessions/*.json` directly if the command fails. **Activity source:** the transcript tail. |
@@ -283,9 +283,10 @@ Risk area: secrets on screen and during screen share.
 
 ### Menu bar item (D20, D21)
 
-- `NSStatusItem(variableLength)` with a custom view:
-  - an SF Symbol icon
-  - a VStack of two 9-pt monospaced-digit numbers, working on top and waiting below
+- `NSStatusItem` with a custom view:
+  - the bot glyph
+  - beside it, a VStack of the live rows only, 9-pt monospaced digits with the mark in a fixed column: working dots (animated, stilled by Reduce Motion) and the working count; then a still orange dot and the waiting count, or a green check for `finishFlash` after a turn (the notch's rule, ticked every 500 ms). One row sits centred; idle shows the glyph alone.
+  - A hosted SwiftUI subview does not size its status bar button: `variableLength` kept the item one icon wide and clipped the counts away (fixed after 0.4.1). The view reports its natural width and the controller sets `item.length` from it.
 - Tint the icon orange when waiting > 0.
 - **Click** opens an `NSPopover` containing:
   1. the `SessionRowView` list (the same view the notch uses)

@@ -22,7 +22,7 @@ All media below is a scripted run on synthetic sessions (`AgentNotch --demo`), n
 |---|---|
 | **Collapsed.** While anything runs, the notch grows a side on each edge: working count on the left, sessions that need you on the right. <br><img src="docs/media/notch-collapsed.png" width="420"> | **Live strip.** The notch opens on its own when a session starts working or needs you. <br><img src="docs/media/live-strip.gif" width="420"> |
 | **Hover for everything.** Every session, its model and effort, and its subagent tree. <br><img src="docs/media/expand-subagents.gif" width="420"> | **Hide details.** Repo, branch and tool name only, for screen sharing. <br><img src="docs/media/hide-details.gif" width="420"> |
-| **Menu bar.** The same rows plus settings, with working and waiting counts in the bar. <br><img src="docs/media/dropdown.png" width="300"> | **Still frames.** <br><img src="docs/media/notch-expanded.png" width="420"> <br><img src="docs/media/notch-live-strip.png" width="420"> |
+| **Menu bar.** The same rows plus settings, with the working and needs-you status in the bar. <br><img src="docs/media/dropdown.png" width="300"> | **Still frames.** <br><img src="docs/media/notch-expanded.png" width="420"> <br><img src="docs/media/notch-live-strip.png" width="420"> |
 
 ## Install
 
@@ -67,8 +67,11 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
   hover it. Hover (or click) for the full list, grouped into **Needs you**, **Working** and
   **Done**; move the pointer away to close it. Macs without a
   notch get a small pill at the top of the screen.
-- **Menu bar.** A little bot with two numbers: working on top, waiting below. It turns orange
-  when something waits. Click it for the same list plus settings. If you can't see it, macOS may
+- **Menu bar.** A little bot with the notch's status beside it, only what is live: blue dots and the
+  number working, an orange dot and the number that need you, or a green check right after a turn
+  finishes. Two of them stack; idle shows the bot alone. The bot turns orange when something waits.
+  <br><img src="docs/media/menubar-states.png" width="570" alt="Menu bar item: idle, working, both, needs you, just finished"><br>
+  Click it for the same list plus settings. If you can't see it, macOS may
   be hiding it behind the notch: hold ⌘ and drag it next to the clock.
 - **Each row.** A state mark (blue dots: working, orange hand: needs you, green check: finished,
   dim dot: idle), the session's title with its model and effort (`Opus 5.5 · high`), then
@@ -137,7 +140,7 @@ Handy flags while developing:
 .build/debug/AgentNotch --dump          # print the current rows once (titles and activity hidden)
 .build/debug/AgentNotch --watch 30      # print row changes with timestamps for 30 s
 .build/debug/AgentNotch --dump --full   # same, with titles and full activity (do not paste publicly)
-.build/debug/AgentNotch --demo          # replay synthetic sessions, for screenshots (--demo dropdown for the menu bar card)
+.build/debug/AgentNotch --demo          # replay synthetic sessions, for screenshots (--demo dropdown for the menu bar card, --demo menubar <dir> for the bar item)
 ```
 
 ## License

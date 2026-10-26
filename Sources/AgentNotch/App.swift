@@ -47,12 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let scene = demoScene {
             // The dropdown scene is a still of the menu bar card: no notch panel in front of it.
-            if scene != "dropdown" {
+            // The menubar scene drives the real menu bar item, so it has neither a stage nor a notch.
+            if scene == "menubar" {
+                statusItem = StatusItemController(store: store, settings: settings)
+            } else if scene != "dropdown" {
                 let notch = NotchPanelController(store: store, settings: settings)
                 self.notch = notch
                 store.onAttention = { [weak notch] session, kind in notch?.attention(session, kind: kind) }
             }
-            demo = DemoDriver.start(scene: scene, store: store, settings: settings, notch: notch)
+            demo = DemoDriver.start(scene: scene, store: store, settings: settings, notch: notch, statusItem: statusItem)
             return
         }
         let monitor = Monitor(store: store)

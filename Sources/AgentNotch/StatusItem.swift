@@ -2,25 +2,63 @@ import AgentNotchCore
 import AppKit
 import SwiftUI
 
-/// D20: icon + two stacked counts (working over waiting), orange when waiting > 0.
+/// Time-driven state of the bar item: the finish check expires with time, not with a store change.
+@MainActor
+@Observable
+final class StatusItemState {
+    var finishFlash = false
+}
+
+/// D20: the bot, then the notch's collapsed sides stacked beside it, showing only what is live:
+/// working dots and count, then the needs-you count or a check for a turn that just finished. One
+/// live row sits centred next to the bot; idle shows the bot alone. The bot turns orange on waiting.
 struct StatusItemView: View {
     let store: SessionStore
+    let state: StatusItemState
+    /// The view's natural width. A hosted subview does not size its status bar button, so the
+    /// controller sets the item's length from this; without it the counts were clipped away.
+    var onWidth: @MainActor (CGFloat) -> Void = { _ in }
 
     var body: some View {
-        HStack(spacing: 3) {
-            BotGlyph(waiting: store.waitingCount > 0)
+        let working = store.workingCount
+        let waiting = store.waitingCount
+        HStack(spacing: 4) {
+            BotGlyph(waiting: waiting > 0)
                 .frame(width: 17, height: 17)
-                .foregroundStyle(store.waitingCount > 0 ? Color.orange : Color.primary)
-            VStack(spacing: -1) {
-                Text("\(store.workingCount)")
-                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                Text("\(store.waitingCount)")
-                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(store.waitingCount > 0 ? Color.orange : Color.secondary)
+                .foregroundStyle(waiting > 0 ? Palette.needsYou : Color.primary)
+            if working > 0 || waiting > 0 || state.finishFlash {
+                VStack(alignment: .leading, spacing: 0) {
+                    if working > 0 {
+                        row(WorkingDots(size: 2.6), count(working, color: .primary))
+                    }
+                    if waiting > 0 {
+                        row(Circle().fill(Palette.needsYou).frame(width: 5, height: 5), count(waiting, color: Palette.needsYou))
+                    } else if state.finishFlash {
+                        row(Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Palette.finished), EmptyView())
+                    }
+                }
             }
         }
         .padding(.horizontal, 4)
         .frame(height: 22)
+        .fixedSize()
+        .onGeometryChange(for: CGFloat.self) { ceil($0.size.width) } action: { onWidth($0) }
+    }
+
+    /// The mark sits in a fixed column so the counts line up across both rows.
+    private func row(_ mark: some View, _ value: some View) -> some View {
+        HStack(spacing: 3) {
+            mark.frame(width: 11)
+            value
+        }
+    }
+
+    private func count(_ n: Int, color: Color) -> some View {
+        Text("\(n)")
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundStyle(color)
     }
 }
 
@@ -111,13 +149,33 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
-    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let item: NSStatusItem
     private let popover = NSPopover()
     private let popoverState = PopoverState()
+    private let store: SessionStore
+    private let state: StatusItemState
+    private var ticker: Task<Void, Never>?
+    /// The view in the bar; `--demo menubar` renders it for captures.
+    let view: StatusItemView
 
     init(store: SessionStore, settings: Settings) {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let state = StatusItemState()
+        self.item = item
+        self.store = store
+        self.state = state
+        view = StatusItemView(store: store, state: state) { width in
+            if item.length != width { item.length = width }
+        }
         super.init()
-        let hosting = PassthroughHostingView(rootView: StatusItemView(store: store))
+        // The finish check expires with time, not with a store change; same cadence as the notch.
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.refreshFlash()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        let hosting = PassthroughHostingView(rootView: view)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         if let button = item.button {
             button.addSubview(hosting)
@@ -137,6 +195,15 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
+    }
+
+    /// The item's button, for `--demo menubar` captures.
+    var button: NSStatusBarButton? { item.button }
+
+    /// Write only on change: every @Observable write re-renders, and this runs twice a second.
+    private func refreshFlash() {
+        let flash = store.anyJustFinished(now: Date())
+        if state.finishFlash != flash { state.finishFlash = flash }
     }
 
     @objc private func togglePopover() {

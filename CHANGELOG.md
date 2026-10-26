@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The menu bar item mirrors the notch's collapsed status, showing only what is live: working dots and count, the needs-you count in orange, or a green check right after a turn finishes. Two stack beside the bot, one sits centred, and idle shows the bot alone.
+- Fixed the menu bar item showing only the bot: it stayed one icon wide and clipped the counts away. It now sizes to its content.
+- `--demo menubar <dir>` steps the real menu bar item through its states and writes a PNG of each.
+
 ## 0.4.1
 
 - The live strip shows the AI title instead of the repo name, cut at a word boundary to 24 characters. Until the title exists, and under Hide details, it shows the repo.

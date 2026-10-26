@@ -2,9 +2,10 @@ import AgentNotchCore
 import AppKit
 import SwiftUI
 
-/// `AgentNotch --demo [notch|dropdown]`: a scripted run on synthetic sessions (paths under
+/// `AgentNotch --demo [notch|dropdown|menubar]`: a scripted run on synthetic sessions (paths under
 /// /Users/dev, R6) in front of a clean backdrop, for README media that must never show a real
-/// session. It does not start the monitor and never reads ~/.claude (R1, R5).
+/// session. It does not start the monitor and never reads ~/.claude (R1, R5). `menubar` has no
+/// backdrop: it steps the real menu bar item through its states and writes a PNG of each.
 @MainActor
 final class DemoDriver {
     private struct Spec {
@@ -43,18 +44,29 @@ final class DemoDriver {
     private let store: SessionStore
     private let settings: Settings
     private let notch: NotchPanelController?
+    private let statusItem: StatusItemController?
     private var states: [String: State] = [:]
     private var tickCount = 0
+    /// `--demo menubar <dir>` writes one PNG per state there.
+    var snapshotDir: String?
 
-    init(store: SessionStore, settings: Settings, notch: NotchPanelController?) {
+    init(store: SessionStore, settings: Settings, notch: NotchPanelController?, statusItem: StatusItemController?) {
         self.store = store
         self.settings = settings
         self.notch = notch
+        self.statusItem = statusItem
     }
 
     /// Opens the backdrop window and starts the chosen scene. Prints the screen rect to capture.
-    static func start(scene: String, store: SessionStore, settings: Settings, notch: NotchPanelController?) -> DemoDriver {
-        let driver = DemoDriver(store: store, settings: settings, notch: notch)
+    static func start(scene: String, store: SessionStore, settings: Settings, notch: NotchPanelController?,
+                      statusItem: StatusItemController?) -> DemoDriver {
+        let driver = DemoDriver(store: store, settings: settings, notch: notch, statusItem: statusItem)
+        if scene == "menubar" {
+            let args = CommandLine.arguments
+            driver.snapshotDir = args.firstIndex(of: "menubar").flatMap { args.dropFirst($0 + 1).first }
+            Task { @MainActor in await driver.runMenuBar() }
+            return driver
+        }
         let stage = DemoStage(scene: scene, store: store, settings: settings)
         stage.show()
         print("STAGE \(Int(stage.captureRect.minX)),\(Int(stage.captureRect.minY)),\(Int(stage.captureRect.width)),\(Int(stage.captureRect.height))")
@@ -126,6 +138,53 @@ final class DemoDriver {
             await wait(2)
             tickActivity()
         }
+    }
+
+    /// Each state the menu bar item can show, held long enough to capture (the check lasts 4 s).
+    private func runMenuBar() async {
+        seed()
+        await shot("idle")
+        set("demo-storefront", .busy, phase: .tool, tool: 0)
+        set("demo-billing", .busy, phase: .thinking)
+        await shot("working")
+        set("demo-infra", .waiting(why: "dialog open", needs: "Apply the Terraform plan to staging?"))
+        await shot("working-and-needs-you")
+        set("demo-storefront", .idle)
+        set("demo-billing", .idle)
+        await shot("needs-you")
+        set("demo-infra", .busy, phase: .tool, tool: 1)
+        await wait(1)
+        set("demo-infra", .idle)                                                // finished turn: green check
+        await shot("finished")
+        await wait(4)
+        await shot("idle-again")
+        print("DEMO DONE")
+        fflush(stdout)
+        exit(0)
+    }
+
+    /// Lets the item settle, prints `SHOT <name> <width>` and writes `<snapshotDir>/<name>.png`,
+    /// then holds. macOS draws status items out of process, so `screencapture` cannot reach them:
+    /// the PNG renders the item's view clipped to the button's real size, on a dark bar.
+    private func shot(_ name: String) async {
+        try? await Task.sleep(for: .milliseconds(800))
+        if let statusItem, let size = statusItem.button?.bounds.size {
+            if let dir = snapshotDir {
+                let renderer = ImageRenderer(content: statusItem.view
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+                    .background(Color(white: 0.12))
+                    .environment(\.colorScheme, .dark))
+                renderer.scale = 4
+                if let image = renderer.cgImage,
+                   let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+                }
+            }
+            print("SHOT \(name) \(Int(size.width))")
+            fflush(stdout)
+        }
+        try? await Task.sleep(for: .milliseconds(1500))
     }
 
     // MARK: - Store plumbing
@@ -262,6 +321,7 @@ private let demoWallpaper = LinearGradient(
 private struct DemoNotchStage: View {
     let store: SessionStore
     let barHeight: CGFloat
+    private let barState = StatusItemState()
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -270,7 +330,7 @@ private struct DemoNotchStage: View {
                 Text("Terminal").fontWeight(.bold)
                 Text("Shell"); Text("Edit"); Text("View")
                 Spacer()
-                StatusItemView(store: store)
+                StatusItemView(store: store, state: barState)
                 Image(systemName: "wifi")
                 Image(systemName: "battery.100")
                 Text("Fri 9:41")

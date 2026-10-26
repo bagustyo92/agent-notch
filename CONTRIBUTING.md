@@ -57,6 +57,8 @@ shape, make the parser tolerate it, and update the "Verified facts" table in `do
 - Keep screenshots free of real session titles, file names or anything private. `.build/debug/AgentNotch --demo`
   replays synthetic sessions in front of a clean backdrop (`--demo dropdown` for the menu bar card); it
   prints the screen rect to capture, e.g. `screencapture -x -R<rect> shot.png`. Park the mouse away from the notch first.
+  `--demo menubar <dir>` steps the real menu bar item through its states and writes one PNG per state to `<dir>`
+  (macOS draws status items out of process, so `screencapture` cannot reach them).
 
 ## Good first issues
 
