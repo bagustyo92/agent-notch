@@ -12,6 +12,7 @@ final class StatusItemState {
 /// D20: the bot, then the notch's collapsed sides stacked beside it, showing only what is live:
 /// working dots and count, then the needs-you count or a check for a turn that just finished. One
 /// live row sits centred next to the bot; idle shows the bot alone. The bot turns orange on waiting.
+/// Nothing here moves: macOS re-snapshots the item for every change, so motion stays in the notch (D42).
 struct StatusItemView: View {
     let store: SessionStore
     let state: StatusItemState
@@ -29,7 +30,7 @@ struct StatusItemView: View {
             if working > 0 || waiting > 0 || state.finishFlash {
                 VStack(alignment: .leading, spacing: 0) {
                     if working > 0 {
-                        row(WorkingDots(size: 2.6), count(working, color: .primary))
+                        row(WorkingDots(size: 2.6, animated: false), count(working, color: .primary))   // still: D42
                     }
                     if waiting > 0 {
                         row(Circle().fill(Palette.needsYou).frame(width: 5, height: 5), count(waiting, color: Palette.needsYou))

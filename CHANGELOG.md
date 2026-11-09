@@ -6,6 +6,7 @@
 - Background Bash tasks get their own rows, `Bash` and its description, nested under the agent that started them: `Background` once the turn has ended, `Running` while it goes on. A row goes as soon as its task's notification arrives, or when its launch was denied. They are read from transcripts AgentNotch already tails; the task output files under `/private/tmp` are never opened.
 - A quiet subagent of an idle session is now kept for 30 minutes, as for a working one, instead of 3. A fork waiting on a long test run no longer disappears. A child that finishes after its session's turn ended is removed at once.
 - `--dump` and `--watch` print each session's open tasks (`tasks=[Bash:4m 2s]`, the description only with `--full`) and the summary line adds `background=N`. `--watch` also prints that line, with a timestamp, whenever a count changes.
+- **CPU while sessions work: about 0.1%, down from about 24%.** The working dots, the needs-you glow and the thinking shimmer now run as Core Animation, so the window server animates them and AgentNotch does nothing per frame; they look and move as before. The menu bar item's working dots are now still: macOS re-snapshots the whole item for every animation frame, which alone cost about 18%. The notch keeps the motion. `--demo bench-<working|waiting|thinking>[-strip]` holds one state for measuring.
 - Known limits: a task started more than 4 MB back in a transcript when AgentNotch launches is missed, as is one started by a subagent that had already finished then.
 
 ## 0.5.0

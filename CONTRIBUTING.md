@@ -64,6 +64,11 @@ and F20 in `docs/DESIGN.md`.
   `--demo menubar <dir>` steps the real menu bar item through its states and writes one PNG per state to `<dir>`
   (macOS draws status items out of process, so `screencapture` cannot reach them).
 
+A change that touches drawing or motion should say what it costs. `.build/release/AgentNotch --demo bench-working`
+(or `bench-waiting`, `bench-thinking-strip`, `bench-idle`) holds one state with nothing else on screen; read
+`ps -o time= -p <pid>` 8 s and 28 s after launch. Motion belongs in Core Animation (`LayerMotion`), never in a
+SwiftUI timeline, and nothing in the menu bar item moves: macOS re-snapshots it for every frame (D42).
+
 ## Good first issues
 
 - iTerm2, Ghostty and WezTerm tab focus.

@@ -2,7 +2,7 @@ import AgentNotchCore
 import AppKit
 import SwiftUI
 
-/// `AgentNotch --demo [notch|dropdown|menubar]`: a scripted run on synthetic sessions (paths under
+/// `AgentNotch --demo [notch|dropdown|menubar|bench-…]`: a scripted run on synthetic sessions (paths under
 /// /Users/dev, R6) in front of a clean backdrop, for README media that must never show a real
 /// session. It does not start the monitor and never reads ~/.claude (R1, R5). `menubar` has no
 /// backdrop: it steps the real menu bar item through its states and writes a PNG of each.
@@ -68,6 +68,10 @@ final class DemoDriver {
             let args = CommandLine.arguments
             driver.snapshotDir = args.firstIndex(of: "menubar").flatMap { args.dropFirst($0 + 1).first }
             Task { @MainActor in await driver.runMenuBar() }
+            return driver
+        }
+        if scene.hasPrefix("bench") {                 // no stage: nothing on screen but the notch
+            Task { @MainActor in await driver.runBench(scene) }
             return driver
         }
         let stage = DemoStage(scene: scene, store: store, settings: settings)
@@ -154,6 +158,21 @@ final class DemoDriver {
         for id in ["a1", "a2", "a3"] { finishSubagent(id) }
         for id in ["demo-storefront", "demo-billing", "demo-infra"] { set(id, .idle) }   // "All quiet"
         while true { await wait(2) }
+    }
+
+    /// `--demo bench-<working|waiting|thinking>[-strip]`: hold one state forever, the notch collapsed
+    /// unless `-strip`, so its CPU can be measured (D42); `bench-idle` holds every session idle.
+    /// Measure with `ps -o time= -p <pid>` over 20 s after an 8 s settle.
+    private func runBench(_ scene: String) async {
+        seed()
+        try? await Task.sleep(for: .seconds(1))
+        if scene.hasPrefix("bench-working") { set("demo-storefront", .busy, phase: .tool, tool: 0) }
+        if scene.hasPrefix("bench-waiting") { set("demo-infra", .waiting(why: "dialog open", needs: "Apply?")) }
+        if scene.hasPrefix("bench-thinking") { set("demo-billing", .busy, phase: .thinking) }
+        try? await Task.sleep(for: .seconds(1))
+        if !scene.hasSuffix("-strip") { notch?.collapse() }
+        print("BENCH READY"); fflush(stdout)
+        while true { try? await Task.sleep(for: .seconds(60)) }
     }
 
     /// Each state the menu bar item can show, held long enough to capture (the check lasts 4 s).

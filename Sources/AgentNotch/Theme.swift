@@ -47,51 +47,63 @@ extension ContextLevel {
     }
 }
 
-/// 0…1 wave with the given period, shifted by `offset` (a fraction of the period).
-private func wave(_ date: Date, period: Double, offset: Double = 0) -> Double {
-    0.5 + 0.5 * sin(2 * .pi * (date.timeIntervalSinceReferenceDate / period - offset))
-}
-
-/// Three dots rising in turn: the "working" signal (Q4).
+/// Three dots rising in turn: the "working" signal (Q4). Core Animation runs the motion (D42);
+/// `animated: false` and Reduce Motion draw the dots still.
 struct WorkingDots: View {
     var color: Color = Palette.working
     var size: CGFloat = 4.5
+    /// False for the menu bar item: macOS re-snapshots the whole item for every frame, ~20 ms each,
+    /// whatever draws it (D42).
+    var animated = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: reduceMotion)) { context in
-            HStack(spacing: size * 0.6) {
-                ForEach(0..<3, id: \.self) { i in
-                    let w = reduceMotion ? 0.7 : pow(wave(context.date, period: 1.1, offset: Double(i) * 0.17), 2)
-                    Circle()
-                        .fill(color)
-                        .frame(width: size, height: size)
-                        .opacity(0.35 + 0.65 * w)
-                        .offset(y: -size * 0.4 * w)
+        Group {
+            if animated, !reduceMotion {
+                DotsLayer(color: LayerMotion.cgColor(color, dark: colorScheme == .dark), size: size)
+            } else {
+                HStack(spacing: size * 0.6) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Circle()
+                            .fill(color)
+                            .frame(width: size, height: size)
+                            .opacity(0.35 + 0.65 * 0.7)
+                            .offset(y: -size * 0.4 * 0.7)
+                    }
                 }
             }
-            .frame(height: size * 1.8)
         }
+        .frame(width: size * 4.2, height: size * 1.8)
+        .accessibilityElement()
         .accessibilityLabel("Working")
     }
 }
 
-/// A soft glow that breathes every two seconds: the "needs you" signal (Q4).
-struct BreathingGlow: ViewModifier {
-    var color: Color
+/// A soft glow that breathes every two seconds: the "needs you" signal (Q4). Core Animation runs it
+/// (D42); Reduce Motion holds it still.
+struct BreathingGlow<Content: View>: View {
+    let content: Content
+    let color: Color
     var radius: CGFloat = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
-    func body(content: Content) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: reduceMotion)) { context in
-            let w = reduceMotion ? 0.6 : wave(context.date, period: 2)
-            content.shadow(color: color.opacity(0.35 + 0.5 * w), radius: radius * (0.4 + 0.6 * w))
+    var body: some View {
+        if reduceMotion {
+            content.shadow(color: color.opacity(0.35 + 0.5 * 0.6), radius: radius * (0.4 + 0.6 * 0.6))
+        } else {
+            // SwiftUI sizes the hidden copy; the layer draws the content and its shadow in exactly that frame.
+            content.hidden().overlay {
+                GlowLayer(content: content.environment(\.colorScheme, colorScheme),
+                          color: LayerMotion.cgColor(color, dark: colorScheme == .dark), radius: radius)
+            }
         }
     }
 }
 
 extension View {
-    func breathingGlow(_ color: Color, radius: CGFloat = 6) -> some View { modifier(BreathingGlow(color: color, radius: radius)) }
+    func breathingGlow(_ color: Color, radius: CGFloat = 6) -> some View { BreathingGlow(content: self, color: color, radius: radius) }
 }
 
 /// The leading state mark of every row: a tinted disc holding the state's symbol or motion.
@@ -130,7 +142,8 @@ struct StateBadge: View {
     }
 }
 
-/// Text with a light band sweeping across it: the thinking verb (Q5).
+/// Text with a light band sweeping across it: the thinking verb (Q5). The text itself is SwiftUI;
+/// Core Animation moves the band (D42).
 struct ShimmerText: View {
     let text: String
     var color: Color = Palette.working
@@ -143,20 +156,16 @@ struct ShimmerText: View {
         if reduceMotion {
             label.foregroundStyle(color)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                let p = (context.date.timeIntervalSinceReferenceDate / 2.2).truncatingRemainder(dividingBy: 1)
-                label
-                    .foregroundStyle(color.opacity(0.6))
-                    .overlay {
-                        label.foregroundStyle(color).brightness(colorScheme == .dark ? 0.25 : 0).mask {
-                            GeometryReader { geo in
-                                LinearGradient(colors: [.clear, .white, .clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: geo.size.width * 0.35)
-                                    .offset(x: geo.size.width * 1.35 * p - geo.size.width * 0.35)
-                            }
-                        }
-                    }
-            }
+            label
+                .foregroundStyle(color.opacity(0.6))
+                .overlay {
+                    ShimmerLayer(content: label
+                        .foregroundStyle(color)
+                        .brightness(colorScheme == .dark ? 0.25 : 0)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                        .environment(\.colorScheme, colorScheme))
+                    .accessibilityHidden(true)
+                }
         }
     }
 }
