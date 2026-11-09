@@ -52,7 +52,7 @@ enum ListMetrics {
             switch item {
             case .header: sum + headerRow
             case .session: sum + sessionRow
-            case .subagent: sum + subagentRow
+            case .subagent, .task: sum + subagentRow
             case .more, .sectionMore: sum + moreRow
             }
         }
@@ -63,7 +63,7 @@ enum ListMetrics {
         let rows = items.reduce(CGFloat(0)) { sum, item in
             switch item {
             case .session: sum + stripSession
-            case .subagent: sum + stripSubagent
+            case .subagent, .task: sum + stripSubagent
             case .more, .sectionMore: sum + stripMore
             case .header: sum
             }
@@ -105,7 +105,8 @@ struct SessionRowView: View {
                 PhaseLine(
                     id: session.id, state: state, activity: session.activity, hideDetails: hideDetails, now: now,
                     waitingFor: session.waitingFor, needs: session.needs, finishedAt: session.turnFinishedAt,
-                    startedAt: session.turnStartedAt, files: session.turnFileCount, unavailable: session.activityUnavailable
+                    startedAt: session.turnStartedAt, files: session.turnFileCount, unavailable: session.activityUnavailable,
+                    backgroundCount: session.backgroundChildCount
                 )
             }
         }
@@ -168,11 +169,13 @@ struct TreeConnector: View {
 struct SubagentRowView: View {
     let agent: Subagent
     let level: Int
+    /// A running child of an idle parent shows as Background (D41).
+    let parentStatus: Status
     let hideDetails: Bool
     let now: Date
 
     var body: some View {
-        let state = DisplayState.of(agent)
+        let state = DisplayState.of(agent, parent: parentStatus)
         HStack(spacing: 6) {
             TreeConnector(level: level)
             StateBadge(state: state, size: 20)
@@ -211,6 +214,54 @@ struct SubagentRowView: View {
         .padding(.trailing, 10)
         .frame(height: ListMetrics.subagentRow)
         .opacity(agent.finished ? 0.75 : 1)
+    }
+}
+
+/// A background Bash task, laid out like a subagent row (D41): `Bash` and its description, then
+/// `Background` under an idle parent or `Running` while the parent works or waits.
+struct TaskRowView: View {
+    let task: AgentNotchCore.BackgroundTask   // SwiftUI has a `BackgroundTask` too
+    let level: Int
+    let parentStatus: Status
+    let hideDetails: Bool
+    let now: Date
+
+    var body: some View {
+        let state = DisplayState.of(task, parent: parentStatus)
+        HStack(spacing: 6) {
+            TreeConnector(level: level)
+            StateBadge(state: state, size: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(task.activity.brief)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    if let detail = BackgroundLabel.taskDetail(task, hideDetails: hideDetails) {
+                        Text(detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 4)
+                }
+                HStack(spacing: 6) {
+                    if state == .background {
+                        PhaseLine(id: task.id, state: state, activity: nil, hideDetails: hideDetails, now: now, size: 11)
+                    } else {
+                        Text(BackgroundLabel.running).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.working)
+                    }
+                    Spacer(minLength: 4)
+                    Text(ElapsedFormatter.precise(now.timeIntervalSince(task.startedAt)))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+        }
+        .padding(.trailing, 10)
+        .frame(height: ListMetrics.subagentRow)
     }
 }
 
@@ -295,8 +346,10 @@ struct SessionListView: View {
         // An expanded tree keeps a trailing "Show fewer" line.
         for id in ui.expanded.sorted() {
             guard let last = items.lastIndex(where: {
-                if case .subagent(_, let sid, _) = $0 { return sid == id }
-                return false
+                switch $0 {
+                case .subagent(_, let sid, _), .task(_, let sid, _): sid == id
+                default: false
+                }
             }) else { continue }
             items.insert(.more(sessionId: id, hidden: 0), at: last + 1)
         }
@@ -337,11 +390,14 @@ struct SessionListView: View {
             .onHover { inside in
                 if inside { ui.hoveredId = session.id } else if ui.hoveredId == session.id { ui.hoveredId = nil }
             }
-        case .subagent(let agent, _, let level):
-            SubagentRowView(agent: agent, level: level, hideDetails: settings.hideDetails, now: now)
+        case .subagent(let agent, let sessionId, let level):
+            SubagentRowView(agent: agent, level: level, parentStatus: parentStatus(sessionId), hideDetails: settings.hideDetails, now: now)
+        case .task(let task, let sessionId, let level):
+            TaskRowView(task: task, level: level, parentStatus: parentStatus(sessionId), hideDetails: settings.hideDetails, now: now)
         case .more(let sessionId, let hidden):
             let expanded = ui.expanded.contains(sessionId)
-            MoreRow(label: "\(hidden) more agent\(hidden == 1 ? "" : "s")", expanded: expanded) {
+            let hasTasks = !(store.session(id: sessionId)?.backgroundTasks.isEmpty ?? true)
+            MoreRow(label: MoreLabel.children(hidden: hidden, hasTasks: hasTasks), expanded: expanded) {
                 if expanded { ui.expanded.remove(sessionId) } else { ui.expanded.insert(sessionId) }
             }
         case .header(let section, let count):
@@ -353,6 +409,8 @@ struct SessionListView: View {
             }
         }
     }
+
+    private func parentStatus(_ sessionId: String) -> Status { store.session(id: sessionId)?.status ?? .working }
 }
 
 /// The compact strip the notch opens on its own (Q10): live sessions only, one line each, with
@@ -364,7 +422,8 @@ struct LiveStripView: View {
     static func items(store: SessionStore, settings: Settings, now: Date) -> [TreeItem] {
         let live = store.liveSessions(now: now)
         var items = SessionTree.items(
-            Array(live.prefix(ListMetrics.stripSessionLimit)), includeSubagents: settings.showSubagentsLive, runningOnly: true
+            Array(live.prefix(ListMetrics.stripSessionLimit)), includeSubagents: settings.showSubagentsLive, includeTasks: false,
+            runningOnly: true
         )
         if live.count > ListMetrics.stripSessionLimit {
             items.append(.more(sessionId: "", hidden: live.count - ListMetrics.stripSessionLimit))
@@ -416,8 +475,9 @@ struct LiveStripView: View {
                     .monospacedDigit()
             }
             .frame(height: ListMetrics.stripSession)
-        case .subagent(let agent, _, _):
-            let state = DisplayState.of(agent)
+        case .subagent(let agent, let sessionId, _):
+            // A just-finished parent keeps its running subagents here for 4 s, as Background (D41).
+            let state = DisplayState.of(agent, parent: store.session(id: sessionId)?.status ?? .working)
             HStack(spacing: 6) {
                 TreeConnector(level: 1).frame(width: 22)
                 StateBadge(state: state, size: 16)
@@ -439,7 +499,7 @@ struct LiveStripView: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, sessionId.isEmpty ? 28 : 50)
                 .frame(maxWidth: .infinity, minHeight: ListMetrics.stripMore, alignment: .leading)
-        case .header, .sectionMore:
+        case .header, .sectionMore, .task:
             EmptyView()
         }
     }

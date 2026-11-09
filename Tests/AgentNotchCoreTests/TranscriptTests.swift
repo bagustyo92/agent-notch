@@ -247,3 +247,194 @@ private func line(_ s: String) -> Data { Data(s.utf8) }
         #expect(snap.unavailable == false)
     }
 }
+
+/// Background Bash tasks (0.6.0, D41, F22, F23). Every line here is synthetic (R6).
+@Suite struct BackgroundTaskRecords {
+    static let start = #"{"type":"assistant","isSidechain":false,"timestamp":"2026-11-09T09:08:09.000Z","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_01AAA","name":"Bash","input":{"command":"npm run e2e --token=hunter2","description":"Run e2e suite","run_in_background":true}}]}}"#
+    static let ack = #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01AAA","content":"Command running in background with ID: b1x2y3z4w. Output is being written to: /private/tmp/claude-501/-Users-dev-work-my-app/s1/tasks/b1x2y3z4w.output","is_error":false}]}}"#
+    static let notification = #"<task-notification>\n<task-id>b1x2y3z4w</task-id>\n<tool-use-id>toolu_01AAA</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-dev-work-my-app/s1/tasks/b1x2y3z4w.output</output-file>\n<status>completed</status>\n<summary>Background command \"Run e2e suite\" completed (exit code 0)</summary>\n</task-notification>"#
+    static var queueOperation: String { #"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-09T09:12:00.000Z","sessionId":"s1","content":""# + notification + #""}"# }
+    static var attachment: String { #"{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":""# + notification + #""}}"# }
+    static var metaUser: String { #"{"type":"user","isSidechain":true,"isMeta":true,"message":{"role":"user","content":""# + notification + #""}}"# }
+    static let launchError = #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01AAA","content":"Permission to use Bash has been denied.","is_error":true}]}}"#
+
+    private func details(_ s: String, includeSidechain: Bool = false) -> MessageDetails? {
+        guard case .message(_, _, _, let details) = TranscriptLineParser.parse(line(s), includeSidechain: includeSidechain) else { return nil }
+        return details
+    }
+
+    @Test func aBackgroundBashCallIsAStart() throws {
+        let starts = try #require(details(Self.start)).backgroundStarts
+        #expect(starts == [BackgroundStart(
+            toolUseId: "toolu_01AAA", activity: Activity(full: "Bash · Run e2e suite", brief: "Bash"),
+            startedAt: Date(timeIntervalSince1970: 1_794_215_289)
+        )])
+    }
+
+    @Test func theCommandNeverReachesTheActivity() throws {
+        let start = try #require(details(Self.start)?.backgroundStarts.first)
+        #expect(!start.activity.full.contains("npm"))
+        #expect(!start.activity.full.contains("hunter2"))
+    }
+
+    @Test func aForegroundOrNonBashCallIsNotAStart() {
+        let foreground = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01B","name":"Bash","input":{"command":"ls","description":"List"}}]}}"#
+        let explicitFalse = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01C","name":"Bash","input":{"command":"ls","run_in_background":false}}]}}"#
+        let notBash = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01D","name":"Agent","input":{"description":"x","run_in_background":true}}]}}"#
+        #expect(details(foreground)?.backgroundStarts == [])
+        #expect(details(explicitFalse)?.backgroundStarts == [])
+        #expect(details(notBash)?.backgroundStarts == [])
+    }
+
+    @Test func aStartWithoutATimestampLeavesTheTimeToTheReader() throws {
+        let noTime = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01E","name":"Bash","input":{"run_in_background":true}}]}}"#
+        let start = try #require(details(noTime)?.backgroundStarts.first)
+        #expect(start.startedAt == nil)
+        #expect(start.activity == Activity(full: "Bash", brief: "Bash"))
+    }
+
+    @Test func theQueueOperationCopyClosesTheTask() {
+        #expect(TranscriptLineParser.parse(line(Self.queueOperation)) == .taskRecords(closed: ["toolu_01AAA"]))
+    }
+
+    @Test(arguments: ["enqueue", "dequeue", "remove", "something-new"])
+    func everyQueueOperationIsAccepted(operation: String) {
+        let s = Self.queueOperation.replacingOccurrences(of: #""operation":"enqueue""#, with: #""operation":""# + operation + #"""#)
+        #expect(TranscriptLineParser.parse(line(s)) == .taskRecords(closed: ["toolu_01AAA"]))
+    }
+
+    @Test func theAttachmentCopyClosesTheTaskInASubagentTranscript() {
+        #expect(TranscriptLineParser.parse(line(Self.attachment), includeSidechain: true) == .taskRecords(closed: ["toolu_01AAA"]))
+    }
+
+    @Test func theMetaUserCopyClosesTheTaskAndStillMeansThinking() throws {
+        let d = try #require(details(Self.metaUser, includeSidechain: true))
+        #expect(d.closedToolUseIds == ["toolu_01AAA"])
+        #expect(d.phase == .thinking)
+    }
+
+    @Test func aNotificationInATextBlockClosesTheTask() throws {
+        let s = #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":""# + Self.notification + #""}]}}"#
+        #expect(try #require(details(s)).closedToolUseIds == ["toolu_01AAA"])
+    }
+
+    @Test func anyStatusClosesAndSeveralNotificationsAreRead() {
+        let two = Self.notification.replacingOccurrences(of: "completed", with: "failed")
+            + Self.notification.replacingOccurrences(of: "toolu_01AAA", with: "toolu_01BBB")
+        let s = #"{"type":"queue-operation","operation":"enqueue","content":""# + two + #""}"#
+        #expect(TranscriptLineParser.parse(line(s)) == .taskRecords(closed: ["toolu_01AAA", "toolu_01BBB"]))
+    }
+
+    @Test func theSummaryOutputFileAndTaskIdAreNeverKept() {
+        for (s, sidechain) in [(Self.queueOperation, false), (Self.attachment, true), (Self.metaUser, true), (Self.ack, false)] {
+            let kept = String(describing: TranscriptLineParser.parse(line(s), includeSidechain: sidechain))
+            #expect(!kept.contains("exit code"))
+            #expect(!kept.contains("private/tmp"))
+            #expect(!kept.contains("b1x2y3z4w"))
+        }
+    }
+
+    @Test func anErroredToolResultIsCollectedAndAnAcknowledgementIsNot() {
+        #expect(details(Self.launchError)?.erroredToolUseIds == ["toolu_01AAA"])
+        #expect(details(Self.launchError)?.phase == .thinking)
+        #expect(details(Self.ack)?.erroredToolUseIds == [])
+        #expect(details(Self.ack)?.closedToolUseIds == [])
+    }
+
+    @Test func oversizedOrMalformedIdsAreDropped() {
+        let long = String(repeating: "x", count: 65)
+        let badStart = Self.start.replacingOccurrences(of: "toolu_01AAA", with: "toolu 01/AAA")
+        #expect(details(badStart)?.backgroundStarts == [])
+        let longClose = Self.queueOperation.replacingOccurrences(of: "toolu_01AAA", with: long)
+        #expect(TranscriptLineParser.parse(line(longClose)) == .ignored)
+        let badStatus = Self.queueOperation.replacingOccurrences(of: "<status>completed</status>", with: "<status>done; rm -rf</status>")
+        #expect(TranscriptLineParser.parse(line(badStatus)) == .ignored)
+        let noStatus = Self.queueOperation.replacingOccurrences(of: "<status>completed</status>", with: "")
+        #expect(TranscriptLineParser.parse(line(noStatus)) == .ignored)
+        let badError = Self.launchError.replacingOccurrences(of: "toolu_01AAA", with: long)
+        #expect(details(badError)?.erroredToolUseIds == [])
+    }
+
+    @Test func queueLinesWithoutANotificationAreIgnored() {
+        #expect(TranscriptLineParser.parse(line(#"{"type":"queue-operation","operation":"enqueue","content":"fix the tests"}"#)) == .ignored)
+        #expect(TranscriptLineParser.parse(line(#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"hello"}}"#)) == .ignored)
+    }
+
+    @Test func sidechainRecordsStayOffTheMainTail() {
+        let sidechainStart = Self.start.replacingOccurrences(of: #""isSidechain":false"#, with: #""isSidechain":true"#)
+        #expect(TranscriptLineParser.parse(line(sidechainStart)) == .ignored)
+        #expect(TranscriptLineParser.parse(line(Self.attachment)) == .ignored)
+        #expect(TranscriptLineParser.parse(line(Self.metaUser)) == .ignored)
+    }
+}
+
+@Suite struct BackgroundTaskTailing {
+    typealias R = BackgroundTaskRecords
+
+    func tempFile(_ lines: [String]) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-\(UUID().uuidString).jsonl")
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
+        return url
+    }
+
+    /// The newest lines give every field `attach` looks for, so its scan is complete after them.
+    static let completeTail = [
+        #"{"type":"ai-title","aiTitle":"Ship it"}"#,
+        #"{"type":"assistant","gitBranch":"main","effort":"high","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10},"content":[{"type":"text","text":"Done."}]}}"#,
+    ]
+
+    @Test func readNewCarriesStartsClosesAndErrors() throws {
+        let url = try tempFile([])
+        let tail = TranscriptTail(path: url)
+        _ = try tail.attach()
+        let h = FileHandle(forWritingAtPath: url.path)!
+        h.seekToEndOfFile()
+        h.write(Data(([R.start, R.ack, R.launchError, R.queueOperation].joined(separator: "\n") + "\n").utf8))
+        h.closeFile()
+        let update = try #require(try tail.readNew())
+        #expect(update.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA"])
+        #expect(update.closedToolUseIds == ["toolu_01AAA"])
+        #expect(update.erroredToolUseIds == ["toolu_01AAA"])
+        #expect(update.activity?.full == "Bash · Run e2e suite")    // the queue line leaves the activity alone
+    }
+
+    @Test func attachFindsAnOpenStart() throws {
+        let snap = try TranscriptTail(path: tempFile([R.start, R.ack] + Self.completeTail)).attach()
+        #expect(snap.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA"])
+        #expect(snap.aiTitle == "Ship it")
+    }
+
+    @Test func attachLeavesAStartWithANewerCloseClosed() throws {
+        let snap = try TranscriptTail(path: tempFile([R.start, R.ack, R.queueOperation] + Self.completeTail)).attach()
+        #expect(snap.backgroundStarts.isEmpty)
+        #expect(snap.closedToolUseIds == ["toolu_01AAA"])
+    }
+
+    @Test func attachLeavesADeniedStartClosed() throws {
+        let snap = try TranscriptTail(path: tempFile([R.start, R.launchError] + Self.completeTail)).attach()
+        #expect(snap.backgroundStarts.isEmpty)
+    }
+
+    @Test func attachFindsAStartPastTheCompletePointAndDecodesNothingElseThere() throws {
+        // 30 undecodable lines sit between the start and the complete tail: the byte filter skips them.
+        let filler = Array(repeating: "not json, never decoded", count: 30)
+        let tail = TranscriptTail(path: try tempFile([R.start] + filler + Self.completeTail), chunkSize: 128)
+        let snap = try tail.attach()
+        #expect(snap.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA"])
+        #expect(snap.aiTitle == "Ship it")
+        #expect(tail.decodeFailures == 0)
+        #expect(snap.unavailable == false)
+    }
+
+    @Test func attachKeepsStartsOldestFirst() throws {
+        let second = R.start.replacingOccurrences(of: "toolu_01AAA", with: "toolu_01BBB")
+        let snap = try TranscriptTail(path: tempFile([R.start, second] + Self.completeTail)).attach()
+        #expect(snap.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA", "toolu_01BBB"])
+    }
+
+    @Test func attachStopsAtTheBackscanLimit() throws {
+        let filler = Array(repeating: #"{"type":"user","message":{"content":[{"type":"tool_result","content":"padding padding padding"}]}}"#, count: 40)
+        let tail = TranscriptTail(path: try tempFile([R.start] + filler + Self.completeTail), chunkSize: 256, maxBackscan: 1024)
+        #expect(try tail.attach().backgroundStarts.isEmpty)       // a known limit (D41)
+    }
+}

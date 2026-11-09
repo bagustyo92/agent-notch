@@ -30,12 +30,16 @@ public final class SessionStore {
     /// How long a finished turn keeps the live strip and the green check up (Q12).
     public static let finishFlash: TimeInterval = 4
     /// An unfinished subagent whose transcript has not grown for this long is dropped: its process
-    /// was killed without the meta file saying so. Shorter once the parent has stopped working.
-    public static let subagentStaleWhileWorking: TimeInterval = 1800
-    public static let subagentStaleWhileIdle: TimeInterval = 180
+    /// was killed without the meta file saying so. The same whether the parent works or is idle: a
+    /// fork waiting on a long foreground command writes nothing meanwhile (D41).
+    public static let subagentStale: TimeInterval = 1800
+    /// Task closes remembered per session, for a close read before its start (D41).
+    static let closedTaskMemory = 512
 
     public var workingCount: Int { sessions.filter { $0.status == .working }.count }
     public var waitingCount: Int { sessions.filter { $0.status == .waiting }.count }
+    /// Running children of idle sessions: the header's `N in background` chip (D41).
+    public var backgroundCount: Int { sessions.reduce(0) { $0 + $1.backgroundChildCount } }
 
     /// Sessions for the live strip: working, needing you, or finished within `finishFlash` (Q10, Q12).
     public func liveSessions(now: Date) -> [Session] {
@@ -57,6 +61,9 @@ public final class SessionStore {
     @ObservationIgnored private var lastAttentionAt: [String: Date] = [:]
     /// Finished subagents folded away at the end of their parent's turn; never re-added (Q22).
     @ObservationIgnored private var dismissedSubagents: [String: Set<String>] = [:]
+    /// Background-task closes per session, oldest first, at most `closedTaskMemory` (D41). The start and
+    /// the close of a subagent's task can sit in different files, so a close may be read first.
+    @ObservationIgnored private var closedTasks: [String: [String]] = [:]
     /// Path hashes edited in each session's current turn, its subagents' included (D39). Never paths.
     @ObservationIgnored private var turnEdits: [String: Set<Int>] = [:]
     /// Sessions whose 200k model went past 200k tokens: they run with the 1M window (`[1m]`, D38).
@@ -131,13 +138,15 @@ public final class SessionStore {
     }
 
     /// Derived transcript fields (M3). Nil leaves a field untouched, so a tool_result line
-    /// cannot blank the activity.
+    /// cannot blank the activity. Background-task records belong to the main session (D41).
     public func updateTranscript(
         id: String, aiTitle: String?, branch: String?, activity: Activity?, phase: Phase? = nil,
         model: String? = nil, effort: String? = nil, contextTokens: Int? = nil, editedPathHashes: [Int] = [],
-        unavailable: Bool = false
+        unavailable: Bool = false, backgroundStarts: [BackgroundStart] = [], closedToolUseIds: [String] = [],
+        erroredToolUseIds: [String] = [], now: Date = Date()
     ) {
         guard var s = byId[id] else { return }
+        applyTaskRecords(&s, owner: nil, starts: backgroundStarts, closed: closedToolUseIds, errored: erroredToolUseIds, now: now)
         if let aiTitle { s.aiTitle = aiTitle }
         if let branch { s.branch = branch }
         if let activity { s.activity = activity }
@@ -153,16 +162,31 @@ public final class SessionStore {
     }
 
     /// Convenience for the monitor: apply one tail read.
-    public func updateTranscript(id: String, update: TranscriptUpdate) {
+    public func updateTranscript(id: String, update: TranscriptUpdate, now: Date = Date()) {
         updateTranscript(id: id, aiTitle: update.aiTitle, branch: update.branch, activity: update.activity, phase: update.phase,
                          model: update.model, effort: update.effort, contextTokens: update.contextTokens,
-                         editedPathHashes: update.editedPathHashes, unavailable: update.unavailable)
+                         editedPathHashes: update.editedPathHashes, unavailable: update.unavailable,
+                         backgroundStarts: update.backgroundStarts, closedToolUseIds: update.closedToolUseIds,
+                         erroredToolUseIds: update.erroredToolUseIds, now: now)
     }
 
-    /// Merge one subagent read (D33). Folded-away finished subagents stay away.
+    /// Merge one subagent read (D33). Folded-away finished subagents stay away; their background
+    /// tasks still close. A subagent that finishes after its parent's turn ended goes at once (D41).
     public func updateSubagent(sessionId: String, update: SubagentUpdate, now: Date) {
-        guard var s = byId[sessionId], s.status != .done,
-              !(dismissedSubagents[sessionId]?.contains(update.agentId) ?? false) else { return }
+        guard let before = byId[sessionId] else { return }
+        var s = before
+        if let read = update.transcript {
+            applyTaskRecords(&s, owner: update.agentId, starts: read.backgroundStarts, closed: read.closedToolUseIds,
+                             errored: read.erroredToolUseIds, now: now)
+        }
+        if update.finished, s.status == .idle {
+            s.subagents.removeAll { $0.id == update.agentId }
+            dismissedSubagents[sessionId, default: []].insert(update.agentId)
+        }
+        if s.status == .done || (dismissedSubagents[sessionId]?.contains(update.agentId) ?? false) {
+            if s != before { byId[sessionId] = s; publish() }
+            return
+        }
         var agent = s.subagents.first { $0.id == update.agentId } ?? Subagent(
             id: update.agentId, agentType: update.agentType, description: update.description,
             startedAt: update.startedAt ?? now, lastWriteAt: update.lastWriteAt ?? now
@@ -189,12 +213,12 @@ public final class SessionStore {
     /// Ids of subagents the store no longer shows, so the monitor can drop their tails.
     public func dismissedSubagentIds(sessionId: String) -> Set<String> { dismissedSubagents[sessionId] ?? [] }
 
-    /// Drop unfinished subagents whose transcript went quiet (see `subagentStale*`).
+    /// Drop unfinished subagents whose transcript went quiet (see `subagentStale`). Background tasks
+    /// have no time-based drop (D41).
     public func dropStaleSubagents(now: Date) {
         var changed = false
         for (id, var s) in byId where !s.subagents.isEmpty {
-            let limit = s.status == .working ? Self.subagentStaleWhileWorking : Self.subagentStaleWhileIdle
-            let kept = s.subagents.filter { $0.finished || now.timeIntervalSince($0.lastWriteAt) < limit }
+            let kept = s.subagents.filter { $0.finished || now.timeIntervalSince($0.lastWriteAt) < Self.subagentStale }
             guard kept.count != s.subagents.count else { continue }
             dismissedSubagents[id, default: []].formUnion(Set(s.subagents.map(\.id)).subtracting(kept.map(\.id)))
             s.subagents = kept
@@ -220,6 +244,7 @@ public final class SessionStore {
             if let endedAt = session.endedAt, now.timeIntervalSince(endedAt) >= lingerDuration {
                 byId[id] = nil
                 dismissedSubagents[id] = nil
+                closedTasks[id] = nil
                 turnEdits[id] = nil
                 extendedContext.remove(id)
                 lastAttentionAt = lastAttentionAt.filter { !$0.key.hasPrefix("\(id)|") }
@@ -233,7 +258,7 @@ public final class SessionStore {
         guard previous != status else { return }
         session.status = status
         session.statusChangedAt = now
-        if status == .done { session.endedAt = now }
+        if status == .done { session.endedAt = now; session.backgroundTasks.removeAll() }
         if status != .waiting { session.waitingFor = nil; session.needs = nil }
         if status.isActive, !previous.isActive { startTurn(&session, now: now) }
         if previous == .working, status == .idle || status == .done {
@@ -251,6 +276,31 @@ public final class SessionStore {
         case .idle where previous == .working: fireAttention(session, .finished, now: now)
         default: break
         }
+    }
+
+    /// Starts first, then closes and launch errors, so a start and its end in one read cancel out.
+    /// A close is remembered for a start read later; a launch error sits after its start in the same
+    /// file, so it only removes an open task. A Done session takes no new tasks (D41).
+    private func applyTaskRecords(
+        _ s: inout Session, owner: String?, starts: [BackgroundStart], closed: [String], errored: [String], now: Date
+    ) {
+        guard !starts.isEmpty || !closed.isEmpty || !errored.isEmpty else { return }
+        if s.status != .done {
+            let remembered = closedTasks[s.id] ?? []
+            for start in starts where !remembered.contains(start.toolUseId) && !s.backgroundTasks.contains(where: { $0.id == start.toolUseId }) {
+                s.backgroundTasks.append(BackgroundTask(
+                    id: start.toolUseId, ownerAgentId: owner, activity: start.activity, startedAt: start.startedAt ?? now
+                ))
+            }
+        }
+        if !closed.isEmpty {
+            var memory = closedTasks[s.id] ?? []
+            for id in closed where !memory.contains(id) { memory.append(id) }
+            if memory.count > Self.closedTaskMemory { memory.removeFirst(memory.count - Self.closedTaskMemory) }
+            closedTasks[s.id] = memory
+        }
+        let ended = Set(closed).union(errored)
+        s.backgroundTasks.removeAll { ended.contains($0.id) }
     }
 
     /// A turn starts when a session goes from idle (or unseen) to working or waiting; answering a

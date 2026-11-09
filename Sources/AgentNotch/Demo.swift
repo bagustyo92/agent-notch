@@ -127,22 +127,33 @@ final class DemoDriver {
         exit(0)
     }
 
+    /// The menu bar card with every state. A finished turn (`demo-docs`) keeps a fork and a Bash task
+    /// running in the background (D41); after ~25 s both finish and fold, then every session goes
+    /// quiet. Capture the stills before that.
     private func runDropdown() async {
         seed()
         let now = Date()
         set("demo-docs", .busy, phase: .tool, tool: 0, at: now.addingTimeInterval(-300))   // a finished turn with files
         set("demo-docs", .busy, phase: .tool, tool: 1, at: now.addingTimeInterval(-200))
         set("demo-docs", .idle, at: now.addingTimeInterval(-120))
+        spawn("bg1", "fork", "Run the release checklist", "Bash · Run e2e suite", .tool, session: "demo-docs",
+              at: now.addingTimeInterval(-170))
+        startTask("toolu_demo_api", "Run local API server", session: "demo-docs", at: now.addingTimeInterval(-150))
         set("demo-storefront", .busy, phase: .tool, tool: 2)
-        spawn("a1", "Explore", "Map the checkout screens", "Grep · checkout", .tool)
+        // a2 and a3 nest under a1, so the card shows one subagent and "+2 more" and the list fits
+        // ListMetrics.maxHeight with the two background rows.
+        spawn("a1", "Explore", "Map the checkout screens", "Grep · checkout", .tool, spawns: ["a2", "a3"])
         spawn("a2", "general-purpose", "Write tests for totals", "Read · CartSummary.swift", .tool)
         spawn("a3", "Plan", "Design the payment step", "Read · PaymentStep.swift", .tool)
         set("demo-billing", .busy, phase: .thinking)
         set("demo-infra", .waiting(why: "dialog open", needs: "Apply the Terraform plan to staging?"))
-        while true {
-            await wait(2)
-            tickActivity()
-        }
+        await wait(25)
+        finishSubagent("bg1", session: "demo-docs")                            // folds at once: its parent is idle
+        closeTask("toolu_demo_api", session: "demo-docs")
+        await wait(6)
+        for id in ["a1", "a2", "a3"] { finishSubagent(id) }
+        for id in ["demo-storefront", "demo-billing", "demo-infra"] { set(id, .idle) }   // "All quiet"
+        while true { await wait(2) }
     }
 
     /// Each state the menu bar item can show, held long enough to capture (the check lasts 4 s).
@@ -241,17 +252,48 @@ final class DemoDriver {
         }
     }
 
-    private func spawn(_ id: String, _ type: String, _ description: String, _ tool: String, _ phase: Phase) {
+    private func spawn(
+        _ id: String, _ type: String, _ description: String, _ tool: String, _ phase: Phase,
+        session: String = "demo-storefront", spawns: [String] = [], at startedAt: Date = Date()
+    ) {
         let now = Date()
         let activity = Activity(full: tool, brief: String(tool.prefix { $0 != " " }))
+        let repo = Self.specs.first { $0.id == session }?.repo ?? "storefront-web"
         store.updateSubagent(
-            sessionId: "demo-storefront",
+            sessionId: session,
             update: SubagentUpdate(
                 agentId: id, agentType: type, description: description, toolUseId: "tu-\(id)", spawnDepth: 1,
-                startedAt: now, lastWriteAt: now,
+                startedAt: startedAt, lastWriteAt: now,
                 transcript: TranscriptUpdate(activity: activity, phase: phase, model: "claude-sonnet-5-5", effort: "medium",
-                                             editedPathHashes: Self.editedPathHashes(tool, repo: "storefront-web"))
+                                             spawnedToolUseIds: spawns.map { "tu-\($0)" },
+                                             editedPathHashes: Self.editedPathHashes(tool, repo: repo))
             ),
+            now: now
+        )
+    }
+
+    /// A background Bash call (D41): the main session's goes through its transcript, a subagent's
+    /// through that subagent's.
+    private func startTask(_ id: String, _ description: String, session: String, owner: String? = nil, at startedAt: Date = Date()) {
+        let start = BackgroundStart(
+            toolUseId: id, activity: ActivitySummary.forToolUse(name: "Bash", input: ["description": description]), startedAt: startedAt
+        )
+        taskRecord(session: session, owner: owner, TranscriptUpdate(backgroundStarts: [start]))
+    }
+
+    /// The task's `<task-notification>` arrives.
+    private func closeTask(_ id: String, session: String, owner: String? = nil) {
+        taskRecord(session: session, owner: owner, TranscriptUpdate(closedToolUseIds: [id]))
+    }
+
+    private func taskRecord(session: String, owner: String?, _ read: TranscriptUpdate) {
+        let now = Date()
+        guard let owner else { store.updateTranscript(id: session, update: read, now: now); return }
+        let agent = store.session(id: session)?.subagents.first { $0.id == owner }
+        store.updateSubagent(
+            sessionId: session,
+            update: SubagentUpdate(agentId: owner, agentType: agent?.agentType ?? "Agent", description: agent?.description ?? "",
+                                   toolUseId: agent?.toolUseId, spawnDepth: agent?.spawnDepth ?? 1, lastWriteAt: now, transcript: read),
             now: now
         )
     }
@@ -263,10 +305,10 @@ final class DemoDriver {
         return ["/Users/dev/work/\(repo)/\(file)".hashValue]
     }
 
-    private func finishSubagent(_ id: String) {
+    private func finishSubagent(_ id: String, session: String = "demo-storefront") {
         let now = Date()
         store.updateSubagent(
-            sessionId: "demo-storefront",
+            sessionId: session,
             update: SubagentUpdate(agentId: id, agentType: "Agent", finished: true, lastWriteAt: now),
             now: now
         )
@@ -307,7 +349,7 @@ final class DemoStage {
     init(scene: String, store: SessionStore, settings: Settings) {
         let screen = NSScreen.screens.first ?? NSScreen.main!
         let notch = NotchGeometry.notchRect(on: screen)
-        let size = scene == "dropdown" ? CGSize(width: 520, height: 780) : CGSize(width: 900, height: 640)
+        let size = scene == "dropdown" ? CGSize(width: 520, height: 840) : CGSize(width: 900, height: 640)
         let centerX = notch?.midX ?? screen.frame.midX
         let x = scene == "dropdown" ? screen.frame.midX - size.width / 2 : centerX - size.width / 2
         let frame = CGRect(x: x, y: screen.frame.maxY - size.height, width: size.width, height: size.height)

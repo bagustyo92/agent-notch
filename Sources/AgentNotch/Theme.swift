@@ -8,6 +8,8 @@ enum Palette {
     static let working = adaptive(dark: (0.38, 0.70, 1.0), light: (0.0, 0.42, 0.88))
     static let needsYou = Color.orange
     static let finished = adaptive(dark: (0.32, 0.84, 0.47), light: (0.10, 0.56, 0.24))
+    /// A child still running after its parent's turn ended (D41). Static: it never animates.
+    static let background = adaptive(dark: (0.69, 0.55, 1.0), light: (0.45, 0.27, 0.85))
     /// Context nearing auto-compact (D38): amber, then red.
     static let contextWarn = adaptive(dark: (1.0, 0.78, 0.20), light: (0.70, 0.47, 0.0))
     static let contextCritical = adaptive(dark: (1.0, 0.38, 0.36), light: (0.80, 0.13, 0.11))
@@ -29,6 +31,7 @@ extension DisplayState {
         case .finished: Palette.finished
         case .idle: .secondary
         case .ended: .gray
+        case .background: Palette.background
         }
     }
 }
@@ -117,6 +120,10 @@ struct StateBadge: View {
                 Image(systemName: "stop.fill")
                     .font(.system(size: size * 0.3))
                     .foregroundStyle(.gray)
+            case .background:
+                Circle()                                        // a hollow ring, no motion (D34, D41)
+                    .strokeBorder(Palette.background, lineWidth: max(1.5, size * 0.08))
+                    .frame(width: size * 0.42, height: size * 0.42)
             }
         }
         .frame(width: size, height: size)
@@ -181,8 +188,9 @@ struct ModelCapsule: View {
     }
 }
 
-/// The phase-aware third line: verb while thinking, the tool or text line, the needs-you label, or
-/// the finished/idle/ended note (D29, D31, D32).
+/// The phase-aware third line: verb while thinking, the tool or text line, the needs-you label, the
+/// finished/idle/ended note, or `Background · <activity>` for a child of an idle parent (D29, D31,
+/// D32, D41). An idle parent's line ends in `· N in background` when `backgroundCount > 0`.
 struct PhaseLine: View {
     let id: String
     let state: DisplayState
@@ -195,6 +203,7 @@ struct PhaseLine: View {
     var startedAt: Date? = nil
     var files = 0
     var unavailable = false
+    var backgroundCount = 0
     var size: CGFloat = 11.5
 
     var body: some View {
@@ -219,14 +228,44 @@ struct PhaseLine: View {
             }
             .lineLimit(1)
         case .finished:
-            Text(FinishedLabel.text(finishedAt: finishedAt, startedAt: startedAt, files: files, now: now))
-                .font(.system(size: size, weight: .medium))
-                .foregroundStyle(Palette.finished.opacity(0.9))
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Text(FinishedLabel.text(finishedAt: finishedAt, startedAt: startedAt, files: files, now: now))
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(Palette.finished.opacity(0.9))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                backgroundSuffix                            // keeps its width: the Finished text truncates first
+            }
         case .idle:
-            plain("Idle")
+            HStack(spacing: 4) {
+                plain("Idle")
+                backgroundSuffix
+            }
         case .ended:
             plain("Ended")
+        case .background:
+            HStack(spacing: 4) {
+                Text(BackgroundLabel.state)
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(Palette.background)
+                    .layoutPriority(1)
+                if let detail = BackgroundLabel.activity(activity, hideDetails: hideDetails) {
+                    plain("· \(detail)")
+                }
+            }
+            .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var backgroundSuffix: some View {
+        if let suffix = BackgroundLabel.parentSuffix(count: backgroundCount) {
+            Text(suffix)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(Palette.background)
+                .lineLimit(1)
+                .fixedSize()
+                .layoutPriority(1)
         }
     }
 

@@ -23,6 +23,7 @@ All media below is a scripted run on synthetic sessions (`AgentNotch --demo`), n
 | **Collapsed.** While anything runs, the notch grows a side on each edge: working count on the left, sessions that need you on the right. <br><img src="docs/media/notch-collapsed.png" width="420"> | **Live strip.** The notch opens on its own when a session starts working or needs you. <br><img src="docs/media/live-strip.gif" width="420"> |
 | **Hover for everything.** Every session, its model and effort, and its subagent tree. <br><img src="docs/media/expand-subagents.gif" width="420"> | **Hide details.** Repo, branch and tool name only, for screen sharing. <br><img src="docs/media/hide-details.gif" width="420"> |
 | **Menu bar.** The same rows plus settings, with the working and needs-you status in the bar. <br><img src="docs/media/dropdown.png" width="300"> | **Still frames.** <br><img src="docs/media/notch-expanded.png" width="420"> <br><img src="docs/media/notch-live-strip.png" width="420"> |
+| **Background.** A finished turn whose fork and Bash command still run stays pinned in Done, its children in violet. <br><img src="docs/media/background.png" width="420"> | |
 
 ## Install
 
@@ -74,7 +75,7 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
   Click it for the same list plus settings. If you can't see it, macOS may
   be hiding it behind the notch: hold ⌘ and drag it next to the clock.
 - **Each row.** A state mark (blue dots: working, orange hand: needs you, green check: finished,
-  dim dot: idle), the session's title with its model, effort and context use (`Opus 5.5 · high · 62%`,
+  dim dot: idle, violet ring: running in the background), the session's title with its model, effort and context use (`Opus 5.5 · high · 62%`,
   amber as it nears auto-compact and red close to it, or a raw count such as `412k` for a model
   AgentNotch does not know), then `repo · branch · where it runs · elapsed`, then what it is doing:
   the tool (`Edit · Login.swift`), a rotating verb while it thinks (`Percolating…`), or what it needs
@@ -82,6 +83,10 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
   subagents edited, and how long the turn ran.
 - **Subagents.** Listed under their session with their own model, effort and activity. Two show by
   default; click "+N more" for the whole tree.
+- **Background.** A turn can end while its subagents or background Bash commands (`run_in_background`)
+  keep running. The session then stays at the top of Done with `· 2 in background`, its running
+  children show under it as `Background` with a violet ring, and the header counts them:
+  `2 in background`. A child goes as soon as it finishes. Background work never opens the notch.
 - **Click a row.**
   - Cursor: opens that exact chat tab in its window.
   - VS Code: brings VS Code forward.
