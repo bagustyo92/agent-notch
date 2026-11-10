@@ -209,25 +209,27 @@ struct BrandHeader: View {
     }
 }
 
-/// `● 2 working  ● 1 needs you`.
+/// `● 2 working  ● 1 needs you  ● 2 in background` (D41).
 struct SummaryHeader: View {
     let store: SessionStore
 
     var body: some View {
+        let background = BackgroundLabel.chip(count: store.backgroundCount)
         HStack(spacing: 12) {
-            if store.workingCount > 0 { chip(store.workingCount, "working", Palette.working) }
-            if store.waitingCount > 0 { chip(store.waitingCount, "need\(store.waitingCount == 1 ? "s" : "") you", Palette.needsYou) }
-            if store.workingCount == 0, store.waitingCount == 0 {
+            if store.workingCount > 0 { chip("\(store.workingCount) working", Palette.working) }
+            if store.waitingCount > 0 { chip("\(store.waitingCount) need\(store.waitingCount == 1 ? "s" : "") you", Palette.needsYou) }
+            if let background { chip(background, Palette.background) }
+            if store.workingCount == 0, store.waitingCount == 0, background == nil {
                 Text("All quiet").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             }
         }
         .fixedSize()
     }
 
-    private func chip(_ n: Int, _ label: String, _ color: Color) -> some View {
+    private func chip(_ text: String, _ color: Color) -> some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(n) \(label)").font(.system(size: 11, weight: .semibold)).foregroundStyle(color).monospacedDigit()
+            Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(color).monospacedDigit()
         }
     }
 }

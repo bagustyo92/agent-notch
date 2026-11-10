@@ -261,3 +261,162 @@ private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
         #expect(FinishedLabel.text(finishedAt: nil, startedAt: started, files: 0, now: t0) == "Finished")
     }
 }
+
+/// 0.6.0: children that keep running after their parent's turn ended (D41).
+@Suite struct BackgroundChildren {
+    private let bash = Activity(full: "Bash · Run e2e suite", brief: "Bash")
+
+    private func agent(_ id: String, use: String? = nil, spawned: Set<String> = [], finished: Bool = false, start: Double = 0) -> Subagent {
+        var a = Subagent(id: id, agentType: "fork", description: id, toolUseId: use ?? "u-\(id)", phase: .tool, activity: bash,
+                         finished: finished, startedAt: t0.addingTimeInterval(start), lastWriteAt: t0)
+        a.spawnedToolUseIds = spawned
+        return a
+    }
+
+    private func task(_ id: String, owner: String? = nil, start: Double = 0, full: String = "Bash · Serve") -> BackgroundTask {
+        BackgroundTask(id: id, ownerAgentId: owner, activity: Activity(full: full, brief: "Bash"), startedAt: t0.addingTimeInterval(start))
+    }
+
+    private func session(_ id: String, _ status: Status = .idle, agents: [Subagent] = [], tasks: [BackgroundTask] = [], changed: Double = 0) -> Session {
+        var s = Session(id: id, cwd: "/Users/dev/\(id)", name: id, status: status, statusChangedAt: t0.addingTimeInterval(changed), startedAt: t0)
+        s.subagents = agents
+        s.backgroundTasks = tasks
+        return s
+    }
+
+    private func levels(_ items: [TreeItem]) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: items.compactMap {
+            switch $0 {
+            case .subagent(let a, _, let level): (a.id, level)
+            case .task(let t, _, let level): (t.id, level)
+            default: nil
+            }
+        })
+    }
+
+    // MARK: States
+
+    @Test func aRunningSubagentOfAnIdleParentIsInTheBackground() {
+        #expect(DisplayState.of(agent("a"), parent: .idle) == .background)
+        #expect(DisplayState.of(agent("a"), parent: .working) == .working(.tool))
+        #expect(DisplayState.of(agent("a"), parent: .waiting) == .working(.tool))     // a waiting parent keeps today's look
+        #expect(DisplayState.of(agent("a", finished: true), parent: .idle) == .finished)
+        #expect(DisplayState.of(agent("a", finished: true), parent: .working) == .finished)
+    }
+
+    @Test func aTaskIsBackgroundUnderAnIdleParentAndRunningOtherwise() {
+        #expect(DisplayState.of(task("t"), parent: .idle) == .background)
+        #expect(DisplayState.of(task("t"), parent: .working) == .working(.tool))
+        #expect(DisplayState.of(task("t"), parent: .waiting) == .working(.tool))
+        #expect(DisplayState.of(task("t"), parent: .done) == .ended)
+    }
+
+    @Test func backgroundIsNotLive() {
+        #expect(!DisplayState.background.isLive)
+    }
+
+    // MARK: Labels
+
+    @Test func theParentSuffixAndTheChipCountRunningChildren() {
+        #expect(BackgroundLabel.parentSuffix(count: 2) == "· 2 in background")
+        #expect(BackgroundLabel.parentSuffix(count: 1) == "· 1 in background")
+        #expect(BackgroundLabel.parentSuffix(count: 0) == nil)
+        #expect(BackgroundLabel.chip(count: 3) == "3 in background")
+        #expect(BackgroundLabel.chip(count: 0) == nil)
+        #expect(BackgroundLabel.state == "Background")
+        #expect(BackgroundLabel.running == "Running")
+    }
+
+    @Test func hideDetailsShortensTheChildLines() {
+        #expect(BackgroundLabel.activity(bash, hideDetails: false) == "Bash · Run e2e suite")
+        #expect(BackgroundLabel.activity(bash, hideDetails: true) == "Bash")
+        #expect(BackgroundLabel.activity(nil, hideDetails: false) == nil)
+        #expect(BackgroundLabel.taskDetail(task("t", full: "Bash · Run local API server"), hideDetails: false) == "Run local API server")
+        #expect(BackgroundLabel.taskDetail(task("t", full: "Bash · Run local API server"), hideDetails: true) == nil)
+        #expect(BackgroundLabel.taskDetail(task("t", full: "Bash"), hideDetails: false) == nil)
+    }
+
+    // MARK: Rows
+
+    @Test func theMoreLineDropsAgentsOnceTasksMayBeHidden() {
+        #expect(MoreLabel.children(hidden: 1, hasTasks: false) == "1 more agent")
+        #expect(MoreLabel.children(hidden: 3, hasTasks: false) == "3 more agents")
+        #expect(MoreLabel.children(hidden: 2, hasTasks: true) == "2 more")
+    }
+
+    @Test func taskRowsHaveTheirOwnIds() {
+        #expect(TreeItem.task(task("toolu_1"), sessionId: "s", level: 1).id == "t:s:toolu_1")
+    }
+
+    @Test func mainTasksFollowTheSubagentsOldestFirstAndShareTheLimit() {
+        let s = session("s", .working, agents: [agent("a")], tasks: [task("new", start: 9), task("old", start: 1)])
+        let collapsed = SessionTree.items([s])
+        #expect(collapsed.map(\.id) == ["s:s", "a:s:a", "t:s:old", "m:s"])
+        #expect(collapsed.last == .more(sessionId: "s", hidden: 1))
+        let open = SessionTree.items([s], expanded: ["s"])
+        #expect(open.map(\.id) == ["s:s", "a:s:a", "t:s:old", "t:s:new"])
+        #expect(levels(open) == ["a": 1, "old": 1, "new": 1])
+    }
+
+    @Test func aSubagentsTaskSitsOneLevelUnderIt() {
+        let s = session("s", agents: [
+            agent("a", use: "u1", spawned: ["u2"]),
+            agent("child", use: "u2", start: 1),
+            agent("b", use: "u3", start: 2),
+        ], tasks: [task("ta", owner: "a"), task("tc", owner: "child"), task("tb", owner: "b"), task("main", start: 5)])
+        let open = SessionTree.items([s], expanded: ["s"])
+        #expect(open.map(\.id) == ["s:s", "a:s:a", "a:s:child", "t:s:tc", "t:s:ta", "a:s:b", "t:s:tb", "t:s:main"])
+        #expect(levels(open) == ["a": 1, "child": 2, "tc": 2, "ta": 2, "b": 1, "tb": 2, "main": 1])
+        let collapsed = SessionTree.items([s])
+        #expect(collapsed.map(\.id) == ["s:s", "a:s:a", "a:s:b", "m:s"])
+        #expect(collapsed.last == .more(sessionId: "s", hidden: 5))
+    }
+
+    @Test func aTaskWhoseOwnerIsGoneMovesUpToLevelOne() {
+        let s = session("s", agents: [agent("a")], tasks: [task("orphan", owner: "folded")])
+        let open = SessionTree.items([s], expanded: ["s"])
+        #expect(open.map(\.id) == ["s:s", "a:s:a", "t:s:orphan"])
+        #expect(levels(open)["orphan"] == 1)
+    }
+
+    @Test func aSessionWithOnlyTasksShowsThem() {
+        let s = session("s", tasks: [task("t1"), task("t2", start: 1), task("t3", start: 2)])
+        #expect(SessionTree.items([s]).map(\.id) == ["s:s", "t:s:t1", "t:s:t2", "m:s"])
+    }
+
+    @Test func theLiveStripLeavesTasksOut() {
+        let s = session("s", .working, agents: [agent("a")], tasks: [task("t")])
+        #expect(SessionTree.items([s], includeTasks: false, runningOnly: true).map(\.id) == ["s:s", "a:s:a"])
+    }
+
+    // MARK: Done pinning
+
+    @Test func idleParentsWithRunningChildrenArePinnedFirstInDone() {
+        let sessions = [
+            session("plain-new", changed: 9),
+            session("ended", .done, changed: 8),
+            session("bg-old", tasks: [task("t")], changed: 1),
+            session("bg-new", agents: [agent("a")], changed: 3),
+            session("plain-old", changed: 2),
+        ]
+        let folded = SessionTree.sectioned(sessions)
+        #expect(folded.map(\.id) == ["h:done", "s:bg-new", "a:bg-new:a", "s:bg-old", "t:bg-old:t", "s:plain-new", "s:ended", "sm:done"])
+        #expect(folded.first == .header(.done, count: 5))
+        #expect(folded.last == .sectionMore(.done, hidden: 1))          // only the unpinned count
+        let open = SessionTree.sectioned(sessions, expandedSections: [.done])
+        #expect(open.map(\.id).filter { $0.hasPrefix("s:") } == ["s:bg-new", "s:bg-old", "s:plain-new", "s:ended", "s:plain-old"])
+        #expect(open.last == .sectionMore(.done, hidden: 0))
+    }
+
+    @Test func pinnedParentsBeyondTheLimitStayVisibleWithoutAShowMoreLine() {
+        let sessions = (0..<4).map { session("bg\($0)", tasks: [task("t\($0)")], changed: Double($0)) } + [session("plain")]
+        let folded = SessionTree.sectioned(sessions)
+        #expect(folded.map(\.id).filter { $0.hasPrefix("s:") } == ["s:bg3", "s:bg2", "s:bg1", "s:bg0", "s:plain"])
+        #expect(!folded.contains { if case .sectionMore = $0 { true } else { false } })
+    }
+
+    @Test func aFinishedOnlyChildDoesNotPin() {
+        let sessions = [session("a", agents: [agent("x", finished: true)], changed: 1), session("b", changed: 5), session("c", changed: 9)]
+        #expect(SessionTree.sectioned(sessions).map(\.id).filter { $0.hasPrefix("s:") } == ["s:c", "s:b"])
+    }
+}

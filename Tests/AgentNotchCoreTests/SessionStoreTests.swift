@@ -250,14 +250,46 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         #expect(store.dismissedSubagentIds(sessionId: "a") == ["done"])
     }
 
-    @Test func quietUnfinishedSubagentsAreDropped() {
+    @Test func quietUnfinishedSubagentsAreDroppedAfterThirtyMinutes() {
         store.replaceList([listed("a", status: "busy")], now: t0)
         store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
-        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStaleWhileWorking - 1))
+        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStale - 1))
         #expect(store.sessions[0].subagents.count == 1)
-        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(10))
-        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStaleWhileIdle + 1))
+        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStale))
         #expect(store.sessions[0].subagents.isEmpty)
+    }
+
+    @Test func anIdleParentKeepsAQuietSubagentForThirtyMinutesToo() {
+        #expect(SessionStore.subagentStale == 1800)
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(10))
+        store.dropStaleSubagents(now: t0.addingTimeInterval(181))                // the old 3-minute rule
+        #expect(store.sessions[0].subagents.map(\.id) == ["x"])
+        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStale - 1))
+        #expect(store.sessions[0].subagents.map(\.id) == ["x"])
+        store.dropStaleSubagents(now: t0.addingTimeInterval(SessionStore.subagentStale))
+        #expect(store.sessions[0].subagents.isEmpty)
+        #expect(store.dismissedSubagentIds(sessionId: "a") == ["x"])
+    }
+
+    @Test func aSubagentThatFinishesUnderAnIdleParentIsRemovedAtOnce() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
+        store.updateSubagent(sessionId: "a", update: update("y"), now: t0)
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(10))
+        store.updateSubagent(sessionId: "a", update: update("x", finished: true), now: t0.addingTimeInterval(20))
+        #expect(store.sessions[0].subagents.map(\.id) == ["y"])
+        #expect(store.dismissedSubagentIds(sessionId: "a") == ["x"])
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0.addingTimeInterval(21))    // stays away
+        #expect(store.sessions[0].subagents.map(\.id) == ["y"])
+    }
+
+    @Test func aSubagentThatFinishesUnderAWorkingParentStaysUntilTheTurnEnds() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x"), now: t0)
+        store.updateSubagent(sessionId: "a", update: update("x", finished: true), now: t0.addingTimeInterval(5))
+        #expect(store.sessions[0].subagents.map(\.finished) == [true])
     }
 
     @Test func endedSessionsTakeNoSubagents() {
@@ -379,5 +411,127 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         #expect(store.session(id: "a")?.turnStartedAt == t0)
         #expect(store.session(id: "a")?.turnFileCount == 0)
         #expect(store.session(id: "b")?.turnStartedAt == t0)
+    }
+}
+
+@MainActor
+@Suite struct SessionStoreBackgroundTasks {
+    let store = SessionStore(testedVersion: "2.1.310")
+
+    private func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
+    private func start(_ id: String, _ description: String = "Serve", at time: Date? = nil) -> BackgroundStart {
+        BackgroundStart(toolUseId: id, activity: Activity(full: "Bash · \(description)", brief: "Bash"), startedAt: time)
+    }
+    private func tasks(_ sid: String = "a") -> [String] { store.session(id: sid)?.backgroundTasks.map(\.id) ?? [] }
+    private func subagentRead(_ agent: String, finished: Bool = false, _ read: TranscriptUpdate) -> SubagentUpdate {
+        SubagentUpdate(agentId: agent, agentType: "fork", description: "Release", toolUseId: "toolu_\(agent)", finished: finished,
+                       startedAt: t0, lastWriteAt: t0, transcript: read)
+    }
+
+    @Test func aMainSessionTaskOpensThenClosesOnItsNotification() throws {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1", at: at(-5))]), now: at(1))
+        let task = try #require(store.session(id: "a")?.backgroundTasks.first)
+        #expect(task.id == "toolu_1")
+        #expect(task.ownerAgentId == nil)
+        #expect(task.startedAt == at(-5))
+        #expect(task.activity.full == "Bash · Serve")
+        store.updateTranscript(id: "a", update: TranscriptUpdate(closedToolUseIds: ["toolu_1"]), now: at(2))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aStartWithoutATimeUsesTheTimeOfTheRead() throws {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(7))
+        #expect(try #require(store.session(id: "a")?.backgroundTasks.first).startedAt == at(7))
+    }
+
+    @Test func aLaunchErrorClosesTheTask() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(1))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(erroredToolUseIds: ["toolu_1"]), now: at(2))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aStartAndItsErrorInOneReadLeaveNoTask() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")], erroredToolUseIds: ["toolu_1"]), now: at(1))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aCloseReadBeforeItsStartStillCloses() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        // The main transcript's queue copy is read before the subagent transcript that started it.
+        store.updateTranscript(id: "a", update: TranscriptUpdate(closedToolUseIds: ["toolu_1"]), now: at(1))
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", TranscriptUpdate(backgroundStarts: [start("toolu_1")])), now: at(2))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aSubagentTaskKnowsItsOwnerAndDuplicatesAreIgnored() throws {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        let read = TranscriptUpdate(backgroundStarts: [start("toolu_1")])
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", read), now: at(1))
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", read), now: at(2))
+        #expect(tasks() == ["toolu_1"])
+        #expect(try #require(store.session(id: "a")?.backgroundTasks.first).ownerAgentId == "f")
+    }
+
+    @Test func aTaskFromADismissedSubagentStillCloses() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", TranscriptUpdate(backgroundStarts: [start("toolu_1")])), now: at(1))
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", finished: true, TranscriptUpdate()), now: at(2))
+        store.replaceList([listed("a", status: "idle")], now: at(3))            // the finished fork folds away
+        #expect(store.dismissedSubagentIds(sessionId: "a") == ["f"])
+        #expect(tasks() == ["toolu_1"])                                         // its task outlives it
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", finished: true, TranscriptUpdate(closedToolUseIds: ["toolu_1"])), now: at(4))
+        #expect(tasks().isEmpty)
+        #expect(store.session(id: "a")?.subagents.isEmpty == true)              // and it stays folded
+    }
+
+    @Test func theSessionTurningDoneClearsItsTasks() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(1))
+        store.replaceList([], now: at(2))
+        #expect(store.session(id: "a")?.status == .done)
+        #expect(tasks().isEmpty)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_2")]), now: at(3))
+        #expect(tasks().isEmpty)                                                // a Done session takes no new tasks
+    }
+
+    @Test func aDeadPidClearsTheTasks() {
+        store.replaceList([listed("a", pid: 4242, status: "idle")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(1))
+        store.checkLiveness(now: at(5)) { _ in false }
+        #expect(tasks().isEmpty)
+        #expect(store.backgroundCount == 0)
+    }
+
+    @Test func backgroundCountCountsChildrenOfIdleSessionsOnly() {
+        store.replaceList([listed("a", status: "busy"), listed("b", status: "idle")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(1))
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", TranscriptUpdate()), now: at(1))
+        store.updateTranscript(id: "b", update: TranscriptUpdate(backgroundStarts: [start("toolu_2")]), now: at(1))
+        #expect(store.backgroundCount == 1)
+        store.replaceList([listed("a", status: "idle"), listed("b", status: "idle")], now: at(2))
+        #expect(store.backgroundCount == 3)
+        store.replaceList([listed("a", status: "waiting"), listed("b", status: "idle")], now: at(3))
+        #expect(store.backgroundCount == 1)
+    }
+
+    @Test func tasksSurviveTheEndOfTheTurn() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(1))
+        store.replaceList([listed("a", status: "idle")], now: at(2))
+        #expect(tasks() == ["toolu_1"])
+        store.dropStaleSubagents(now: at(100_000))                              // no time-based drop for tasks
+        #expect(tasks() == ["toolu_1"])
+    }
+
+    @Test func closesAreRememberedForTheNewest512Only() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        let ids = (0...512).map { "toolu_\($0)" }
+        store.updateTranscript(id: "a", update: TranscriptUpdate(closedToolUseIds: ids), now: at(1))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_0"), start("toolu_1")]), now: at(2))
+        #expect(tasks() == ["toolu_0"])                                         // the oldest close was let go
     }
 }

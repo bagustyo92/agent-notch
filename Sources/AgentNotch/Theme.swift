@@ -8,6 +8,8 @@ enum Palette {
     static let working = adaptive(dark: (0.38, 0.70, 1.0), light: (0.0, 0.42, 0.88))
     static let needsYou = Color.orange
     static let finished = adaptive(dark: (0.32, 0.84, 0.47), light: (0.10, 0.56, 0.24))
+    /// A child still running after its parent's turn ended (D41). Static: it never animates.
+    static let background = adaptive(dark: (0.69, 0.55, 1.0), light: (0.45, 0.27, 0.85))
     /// Context nearing auto-compact (D38): amber, then red.
     static let contextWarn = adaptive(dark: (1.0, 0.78, 0.20), light: (0.70, 0.47, 0.0))
     static let contextCritical = adaptive(dark: (1.0, 0.38, 0.36), light: (0.80, 0.13, 0.11))
@@ -29,6 +31,7 @@ extension DisplayState {
         case .finished: Palette.finished
         case .idle: .secondary
         case .ended: .gray
+        case .background: Palette.background
         }
     }
 }
@@ -44,51 +47,63 @@ extension ContextLevel {
     }
 }
 
-/// 0…1 wave with the given period, shifted by `offset` (a fraction of the period).
-private func wave(_ date: Date, period: Double, offset: Double = 0) -> Double {
-    0.5 + 0.5 * sin(2 * .pi * (date.timeIntervalSinceReferenceDate / period - offset))
-}
-
-/// Three dots rising in turn: the "working" signal (Q4).
+/// Three dots rising in turn: the "working" signal (Q4). Core Animation runs the motion (D42);
+/// `animated: false` and Reduce Motion draw the dots still.
 struct WorkingDots: View {
     var color: Color = Palette.working
     var size: CGFloat = 4.5
+    /// False for the menu bar item: macOS re-snapshots the whole item for every frame, ~20 ms each,
+    /// whatever draws it (D42).
+    var animated = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: reduceMotion)) { context in
-            HStack(spacing: size * 0.6) {
-                ForEach(0..<3, id: \.self) { i in
-                    let w = reduceMotion ? 0.7 : pow(wave(context.date, period: 1.1, offset: Double(i) * 0.17), 2)
-                    Circle()
-                        .fill(color)
-                        .frame(width: size, height: size)
-                        .opacity(0.35 + 0.65 * w)
-                        .offset(y: -size * 0.4 * w)
+        Group {
+            if animated, !reduceMotion {
+                DotsLayer(color: LayerMotion.cgColor(color, dark: colorScheme == .dark), size: size)
+            } else {
+                HStack(spacing: size * 0.6) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Circle()
+                            .fill(color)
+                            .frame(width: size, height: size)
+                            .opacity(0.35 + 0.65 * 0.7)
+                            .offset(y: -size * 0.4 * 0.7)
+                    }
                 }
             }
-            .frame(height: size * 1.8)
         }
+        .frame(width: size * 4.2, height: size * 1.8)
+        .accessibilityElement()
         .accessibilityLabel("Working")
     }
 }
 
-/// A soft glow that breathes every two seconds: the "needs you" signal (Q4).
-struct BreathingGlow: ViewModifier {
-    var color: Color
+/// A soft glow that breathes every two seconds: the "needs you" signal (Q4). Core Animation runs it
+/// (D42); Reduce Motion holds it still.
+struct BreathingGlow<Content: View>: View {
+    let content: Content
+    let color: Color
     var radius: CGFloat = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
-    func body(content: Content) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: reduceMotion)) { context in
-            let w = reduceMotion ? 0.6 : wave(context.date, period: 2)
-            content.shadow(color: color.opacity(0.35 + 0.5 * w), radius: radius * (0.4 + 0.6 * w))
+    var body: some View {
+        if reduceMotion {
+            content.shadow(color: color.opacity(0.35 + 0.5 * 0.6), radius: radius * (0.4 + 0.6 * 0.6))
+        } else {
+            // SwiftUI sizes the hidden copy; the layer draws the content and its shadow in exactly that frame.
+            content.hidden().overlay {
+                GlowLayer(content: content.environment(\.colorScheme, colorScheme),
+                          color: LayerMotion.cgColor(color, dark: colorScheme == .dark), radius: radius)
+            }
         }
     }
 }
 
 extension View {
-    func breathingGlow(_ color: Color, radius: CGFloat = 6) -> some View { modifier(BreathingGlow(color: color, radius: radius)) }
+    func breathingGlow(_ color: Color, radius: CGFloat = 6) -> some View { BreathingGlow(content: self, color: color, radius: radius) }
 }
 
 /// The leading state mark of every row: a tinted disc holding the state's symbol or motion.
@@ -117,13 +132,18 @@ struct StateBadge: View {
                 Image(systemName: "stop.fill")
                     .font(.system(size: size * 0.3))
                     .foregroundStyle(.gray)
+            case .background:
+                Circle()                                        // a hollow ring, no motion (D34, D41)
+                    .strokeBorder(Palette.background, lineWidth: max(1.5, size * 0.08))
+                    .frame(width: size * 0.42, height: size * 0.42)
             }
         }
         .frame(width: size, height: size)
     }
 }
 
-/// Text with a light band sweeping across it: the thinking verb (Q5).
+/// Text with a light band sweeping across it: the thinking verb (Q5). The text itself is SwiftUI;
+/// Core Animation moves the band (D42).
 struct ShimmerText: View {
     let text: String
     var color: Color = Palette.working
@@ -136,20 +156,16 @@ struct ShimmerText: View {
         if reduceMotion {
             label.foregroundStyle(color)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                let p = (context.date.timeIntervalSinceReferenceDate / 2.2).truncatingRemainder(dividingBy: 1)
-                label
-                    .foregroundStyle(color.opacity(0.6))
-                    .overlay {
-                        label.foregroundStyle(color).brightness(colorScheme == .dark ? 0.25 : 0).mask {
-                            GeometryReader { geo in
-                                LinearGradient(colors: [.clear, .white, .clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: geo.size.width * 0.35)
-                                    .offset(x: geo.size.width * 1.35 * p - geo.size.width * 0.35)
-                            }
-                        }
-                    }
-            }
+            label
+                .foregroundStyle(color.opacity(0.6))
+                .overlay {
+                    ShimmerLayer(content: label
+                        .foregroundStyle(color)
+                        .brightness(colorScheme == .dark ? 0.25 : 0)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                        .environment(\.colorScheme, colorScheme))
+                    .accessibilityHidden(true)
+                }
         }
     }
 }
@@ -181,8 +197,9 @@ struct ModelCapsule: View {
     }
 }
 
-/// The phase-aware third line: verb while thinking, the tool or text line, the needs-you label, or
-/// the finished/idle/ended note (D29, D31, D32).
+/// The phase-aware third line: verb while thinking, the tool or text line, the needs-you label, the
+/// finished/idle/ended note, or `Background · <activity>` for a child of an idle parent (D29, D31,
+/// D32, D41). An idle parent's line ends in `· N in background` when `backgroundCount > 0`.
 struct PhaseLine: View {
     let id: String
     let state: DisplayState
@@ -195,6 +212,7 @@ struct PhaseLine: View {
     var startedAt: Date? = nil
     var files = 0
     var unavailable = false
+    var backgroundCount = 0
     var size: CGFloat = 11.5
 
     var body: some View {
@@ -219,14 +237,44 @@ struct PhaseLine: View {
             }
             .lineLimit(1)
         case .finished:
-            Text(FinishedLabel.text(finishedAt: finishedAt, startedAt: startedAt, files: files, now: now))
-                .font(.system(size: size, weight: .medium))
-                .foregroundStyle(Palette.finished.opacity(0.9))
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Text(FinishedLabel.text(finishedAt: finishedAt, startedAt: startedAt, files: files, now: now))
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(Palette.finished.opacity(0.9))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                backgroundSuffix                            // keeps its width: the Finished text truncates first
+            }
         case .idle:
-            plain("Idle")
+            HStack(spacing: 4) {
+                plain("Idle")
+                backgroundSuffix
+            }
         case .ended:
             plain("Ended")
+        case .background:
+            HStack(spacing: 4) {
+                Text(BackgroundLabel.state)
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(Palette.background)
+                    .layoutPriority(1)
+                if let detail = BackgroundLabel.activity(activity, hideDetails: hideDetails) {
+                    plain("· \(detail)")
+                }
+            }
+            .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var backgroundSuffix: some View {
+        if let suffix = BackgroundLabel.parentSuffix(count: backgroundCount) {
+            Text(suffix)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(Palette.background)
+                .lineLimit(1)
+                .fixedSize()
+                .layoutPriority(1)
         }
     }
 

@@ -49,6 +49,8 @@ New behaviour goes into Core behind a small public function first, with a test, 
 The session registry and transcript formats are internal to Claude Code and change between
 versions. When something breaks after an update, add a synthetic fixture that reproduces the new
 shape, make the parser tolerate it, and update the "Verified facts" table in `docs/DESIGN.md`.
+The background task records in `TranscriptTail.swift` (`run_in_background` starts, `<task-notification>`
+closes, F22 and F23) are the most likely to drift.
 When Claude Code adds a model, update the model table in `Sources/AgentNotchCore/ContextWindow.swift`
 and F20 in `docs/DESIGN.md`.
 
@@ -61,6 +63,11 @@ and F20 in `docs/DESIGN.md`.
   prints the screen rect to capture, e.g. `screencapture -x -R<rect> shot.png`. Park the mouse away from the notch first.
   `--demo menubar <dir>` steps the real menu bar item through its states and writes one PNG per state to `<dir>`
   (macOS draws status items out of process, so `screencapture` cannot reach them).
+
+A change that touches drawing or motion should say what it costs. `.build/release/AgentNotch --demo bench-working`
+(or `bench-waiting`, `bench-thinking-strip`, `bench-idle`) holds one state with nothing else on screen; read
+`ps -o time= -p <pid>` 8 s and 28 s after launch. Motion belongs in Core Animation (`LayerMotion`), never in a
+SwiftUI timeline, and nothing in the menu bar item moves: macOS re-snapshots it for every frame (D42).
 
 ## Good first issues
 

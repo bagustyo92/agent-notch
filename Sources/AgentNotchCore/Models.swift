@@ -86,6 +86,13 @@ public struct Session: Identifiable, Sendable, Equatable {
     public var contextWindow: Int?
     /// Subagents of the current turn, plus any still running (D33).
     public var subagents: [Subagent] = []
+    /// Background Bash tasks still running, the session's own and its subagents' (D41).
+    public var backgroundTasks: [BackgroundTask] = []
+
+    /// Unfinished subagents plus open background tasks.
+    public var runningChildCount: Int { subagents.filter { !$0.finished }.count + backgroundTasks.count }
+    /// Children running after the turn ended: `runningChildCount` while idle, else 0 (D41).
+    public var backgroundChildCount: Int { status == .idle ? runningChildCount : 0 }
 
     public init(
         id: String, pid: Int32? = nil, cwd: String, branch: String? = nil, name: String, aiTitle: String? = nil,
@@ -132,6 +139,22 @@ public struct Subagent: Identifiable, Sendable, Equatable {
         self.spawnDepth = spawnDepth; self.phase = phase; self.activity = activity; self.model = model
         self.effort = effort; self.finished = finished; self.startedAt = startedAt; self.finishedAt = finishedAt
         self.lastWriteAt = lastWriteAt
+    }
+}
+
+/// A background Bash task (`run_in_background: true`) that has not closed yet (D41). It has no meta
+/// file: its start and its end are transcript lines matched by the `Bash` call's tool_use id (F22).
+public struct BackgroundTask: Identifiable, Sendable, Equatable {
+    /// The `Bash` call's tool_use id.
+    public let id: String
+    /// The subagent whose transcript started it; nil for the main session.
+    public var ownerAgentId: String?
+    /// `Bash · Run e2e suite`, masked; never the command (D11).
+    public var activity: Activity
+    public var startedAt: Date
+
+    public init(id: String, ownerAgentId: String? = nil, activity: Activity, startedAt: Date) {
+        self.id = id; self.ownerAgentId = ownerAgentId; self.activity = activity; self.startedAt = startedAt
     }
 }
 

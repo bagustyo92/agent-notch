@@ -87,20 +87,28 @@ enum DebugDump {
             } else {
                 monitor.start()
                 var last: [String: String] = [:]
+                var lastCounts = ""
                 let deadline = Date().addingTimeInterval(watchSeconds)
                 while Date() < deadline {
                     for s in monitor.store.sessions {
                         let r = row(s, full: full)
                         if last[s.id] != r { last[s.id] = r; print("\(stamp())\t\(r)"); fflush(stdout) }
                     }
+                    // The header's counts, whenever they change (D41: `background=N` while a task runs).
+                    let c = counts(monitor.store)
+                    if c != lastCounts { lastCounts = c; print("\(stamp())\t\(c)"); fflush(stdout) }
                     try? await Task.sleep(for: .milliseconds(200))
                 }
                 monitor.stop()
             }
-            print("working=\(monitor.store.workingCount) waiting=\(monitor.store.waitingCount) note=\(monitor.store.versionNote ?? "-")")
+            print("\(counts(monitor.store)) note=\(monitor.store.versionNote ?? "-")")
             exit(0)
         }
         dispatchMain()
+    }
+
+    static func counts(_ store: SessionStore) -> String {
+        "working=\(store.workingCount) waiting=\(store.waitingCount) background=\(store.backgroundCount)"
     }
 
     static func row(_ s: Session, full: Bool) -> String {
@@ -111,8 +119,11 @@ enum DebugDump {
         let ctx = ContextIndicator.of(s)?.label ?? "-"
         let tokens = "\(s.contextTokens.map(String.init) ?? "-")/\(s.contextWindow.map(String.init) ?? "?")"
         let agents = s.subagents.map { "\($0.agentType):\($0.finished ? "done" : $0.phase?.rawValue ?? "-")" }.joined(separator: ",")
+        // Bash and its age; the description only under --full (D41).
+        let tasks = s.backgroundTasks.map { "\(full ? $0.activity.full : $0.activity.brief):\(ElapsedFormatter.precise(Date().timeIntervalSince($0.startedAt)))" }
+            .joined(separator: ",")
         let link = IDEDeepLink.resolve(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt)?.absoluteString ?? "-"
-        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\tlink=\(link)"
+        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)"
     }
 
     static func stamp() -> String {
