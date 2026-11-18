@@ -70,6 +70,39 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         #expect(a.status == .idle)
     }
 
+    /// Regression for the live `link=-` (F28): the row took the second process's pid but kept the
+    /// first one's `startedAt`, so the deep-link start check always failed (D43).
+    @Test func newPidBringsItsOwnStartAndIsProbedAgain() {
+        store.replaceList([listed("s", pid: 3910, status: "idle", startedAt: t0)], now: t0)
+        store.setProbe(id: "s", source: .cursor, tty: nil)
+        store.replaceList([listed("s", pid: 51965, status: "idle", startedAt: t0.addingTimeInterval(3360))], now: t0.addingTimeInterval(5))
+        let s = store.sessions[0]
+        #expect(s.pid == 51965)
+        #expect(s.startedAt == t0.addingTimeInterval(3360))
+        #expect(s.source == .unknown)          // Monitor re-probes .unknown sessions on the same refresh
+    }
+
+    @Test func listEntryWithoutAPidKeepsTheKnownProcess() {
+        store.replaceList([listed("s", pid: 3910, status: "idle", startedAt: t0)], now: t0)
+        store.setProbe(id: "s", source: .cursor, tty: nil)
+        store.replaceList([listed("s", pid: nil, status: "idle", startedAt: t0.addingTimeInterval(9))], now: t0.addingTimeInterval(5))
+        #expect(store.sessions[0].pid == 3910)
+        #expect(store.sessions[0].startedAt == t0)
+        #expect(store.sessions[0].source == .cursor)
+    }
+
+    @Test func rememberedWindowOutlivesTheProcessButNotTheRow() {
+        let window = IDEWindow(windowId: 5, workspace: "a", mainPid: 322, mainStartedAt: t0)
+        store.replaceList([listed("a", status: "idle")], now: t0)
+        store.setIDEWindow(id: "a", window)
+        store.replaceList([], now: t0.addingTimeInterval(1))
+        #expect(store.session(id: "a")?.status == .done)
+        #expect(store.session(id: "a")?.ideWindow == window)
+        store.tick(now: t0.addingTimeInterval(1 + 600))
+        store.replaceList([listed("a", status: "idle")], now: t0.addingTimeInterval(700))
+        #expect(store.session(id: "a")?.ideWindow == nil)
+    }
+
     @Test func versionNoteAppearsOnlyWhenAVersionDiffers() {
         store.replaceList([listed("a", status: "busy", version: "2.1.310")], now: t0)
         #expect(store.versionNote == nil)

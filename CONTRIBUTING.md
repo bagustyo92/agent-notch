@@ -51,6 +51,8 @@ versions. When something breaks after an update, add a synthetic fixture that re
 shape, make the parser tolerate it, and update the "Verified facts" table in `docs/DESIGN.md`.
 The background task records in `TranscriptTail.swift` (`run_in_background` starts, `<task-notification>`
 closes, F22 and F23) are the most likely to drift.
+The Cursor extension-host title shape parsed in `IDEDeepLink.swift` (F26) can drift with Cursor
+updates; `--dump` shows `trust=` and `link=` for each session.
 When Claude Code adds a model, update the model table in `Sources/AgentNotchCore/ContextWindow.swift`
 and F20 in `docs/DESIGN.md`.
 

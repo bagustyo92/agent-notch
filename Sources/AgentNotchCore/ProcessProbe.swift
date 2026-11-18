@@ -84,4 +84,15 @@ public enum ProcessProbe {
     public static func source(forPid pid: Int32) -> Source {
         Source.classify(executablePath: executablePath(pid))
     }
+
+    /// Every pid on the system (`proc_listallpids`), used to find the IDE's extension hosts (D43).
+    public static func allPids() -> [Int32] {
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        // Room for processes started between the two calls.
+        var pids = [Int32](repeating: 0, count: Int(count) + 64)
+        let filled = pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
+        guard filled > 0 else { return [] }
+        return pids.prefix(Int(filled)).filter { $0 > 0 }
+    }
 }

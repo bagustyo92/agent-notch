@@ -19,6 +19,8 @@ public final class Monitor {
     private let debounceInterval: TimeInterval
     private let livenessInterval: TimeInterval
     private let isAlive: @Sendable (Int32) -> Bool
+    /// Process facts for IDE window routing (D43).
+    private let ideProbe: IDEDeepLink.Probe
 
     private var sessionsWatcher: FileWatcher?
     private var projectsWatcher: FileWatcher?
@@ -43,9 +45,11 @@ public final class Monitor {
         transcriptModifiedAt: @escaping ModifiedAt = Monitor.modificationDate,
         debounceInterval: TimeInterval = 0.3,
         livenessInterval: TimeInterval = 5,
-        isAlive: @escaping @Sendable (Int32) -> Bool = ProcessProbe.isAlive
+        isAlive: @escaping @Sendable (Int32) -> Bool = ProcessProbe.isAlive,
+        ideProbe: IDEDeepLink.Probe = .live
     ) {
         self.isAlive = isAlive
+        self.ideProbe = ideProbe
         self.store = store
         self.lister = lister
         self.registry = RegistryReader(directory: sessionsDirectory)
@@ -95,6 +99,42 @@ public final class Monitor {
         debounceTask?.cancel(); retryTask?.cancel(); livenessTask?.cancel()
     }
 
+    /// D43: one entry per session id; for a duplicate, prefer the process under a trusted IDE host.
+    /// The host list is read once per source, and only when an id is duplicated.
+    nonisolated static func dedupe(_ entries: [ListedSession], probe: IDEDeepLink.Probe) -> [ListedSession] {
+        var hostsBySource: [Source: [IDEDeepLink.ExtensionHost]] = [:]
+        return SessionDedupe.pick(entries, isCurrent: { entry in
+            guard let pid = entry.pid else { return false }
+            let source = Source.classify(executablePath: probe.executablePath(pid))
+            guard IDEDeepLink.supports(source) else { return false }
+            let hosts = hostsBySource[source] ?? IDEDeepLink.hosts(source: source, probe: probe)
+            hostsBySource[source] = hosts
+            return IDEDeepLink.locate(source: source, pid: pid, startedAt: entry.startedAt, hosts: hosts, probe: probe)?.trusted == true
+        }, startTime: probe.startTime)
+    }
+
+    /// D43: remember the window of each live IDE session whose host is trusted, so a click can
+    /// still raise it after the session turns Done or its host stops being trusted. An untrusted
+    /// read leaves the last remembered window in place. Off the main actor; runs per refresh only.
+    private func rememberIDEWindows() async {
+        let candidates = store.sessions.filter { $0.status != .done && $0.pid != nil && IDEDeepLink.supports($0.source) }
+            .map { (id: $0.id, source: $0.source, pid: $0.pid, startedAt: $0.startedAt) }
+        guard !candidates.isEmpty else { return }
+        let probe = ideProbe
+        let found = await Task.detached(priority: .utility) { () -> [(id: String, pid: Int32?, window: IDEWindow)] in
+            var hostsBySource: [Source: [IDEDeepLink.ExtensionHost]] = [:]
+            return candidates.compactMap { c in
+                let hosts = hostsBySource[c.source] ?? IDEDeepLink.hosts(source: c.source, probe: probe)
+                hostsBySource[c.source] = hosts
+                guard let window = IDEDeepLink.locate(source: c.source, pid: c.pid, startedAt: c.startedAt, hosts: hosts, probe: probe)?.window
+                else { return nil }
+                return (c.id, c.pid, window)
+            }
+        }.value
+        // A refresh may have moved the row to another process meanwhile; keep only current reads.
+        for f in found where store.session(id: f.id)?.pid == f.pid { store.setIDEWindow(id: f.id, f.window) }
+    }
+
     /// D23: the registry changed → one list refresh after 300 ms of quiet.
     func scheduleRefresh() {
         debounceTask?.cancel()
@@ -113,9 +153,11 @@ public final class Monitor {
         var knownVersions: [String: String] = [:]
         for session in store.sessions { if let v = session.claudeVersion { knownVersions[session.id] = v } }
         let locator = transcriptLocator, modifiedAt = transcriptModifiedAt, registry = registry, isAlive = isAlive
+        let ideProbe = ideProbe
         let enriched = await Task.detached(priority: .utility) { () -> [ListedSession] in
             // A crashed session's registry file can linger; a dead pid is never listed as live.
-            result.sessions.filter { $0.pid.map(isAlive) ?? true }.map { entry in
+            let live = result.sessions.filter { $0.pid.map(isAlive) ?? true }
+            return Monitor.dedupe(live, probe: ideProbe).map { entry in
                 var e = entry
                 if e.kind == .background, let url = locator(e.sessionId) { e.transcriptModifiedAt = modifiedAt(url) }
                 if e.version == nil, let pid = e.pid {
@@ -131,6 +173,7 @@ public final class Monitor {
             let (source, tty) = probe(pid)
             store.setProbe(id: session.id, source: source, tty: tty)
         }
+        await rememberIDEWindows()
         locateMissingTranscripts()
 
         if let retryAt = result.retryAt {

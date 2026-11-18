@@ -88,6 +88,9 @@ public struct Session: Identifiable, Sendable, Equatable {
     public var subagents: [Subagent] = []
     /// Background Bash tasks still running, the session's own and its subagents' (D41).
     public var backgroundTasks: [BackgroundTask] = []
+    /// The IDE window this session was last seen in under a trusted host; kept after it turns
+    /// Done so a click can still raise that window (D43). Memory only.
+    public var ideWindow: IDEWindow?
 
     /// Unfinished subagents plus open background tasks.
     public var runningChildCount: Int { subagents.filter { !$0.finished }.count + backgroundTasks.count }
