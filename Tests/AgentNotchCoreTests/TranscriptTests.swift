@@ -257,6 +257,10 @@ private func line(_ s: String) -> Data { Data(s.utf8) }
     static var attachment: String { #"{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":""# + notification + #""}}"# }
     static var metaUser: String { #"{"type":"user","isSidechain":true,"isMeta":true,"message":{"role":"user","content":""# + notification + #""}}"# }
     static let launchError = #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01AAA","content":"Permission to use Bash has been denied.","is_error":true}]}}"#
+    /// `TaskStop` names the task id of the acknowledgement, not the `Bash` call's id (F25).
+    static let stop = #"{"type":"assistant","isSidechain":false,"timestamp":"2026-11-09T09:10:00.000Z","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_01SSS","name":"TaskStop","input":{"task_id":"b1x2y3z4w"}}]}}"#
+    /// The stop's own result: a JSON string that holds the command. It sends no notification (F25).
+    static let stopResult = #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01SSS","content":"{\"message\":\"Successfully stopped task: b1x2y3z4w (npm run e2e --token=hunter2)\",\"task_id\":\"b1x2y3z4w\",\"task_type\":\"local_bash\",\"command\":\"npm run e2e --token=hunter2\"}"}]}}"#
 
     private func details(_ s: String, includeSidechain: Bool = false) -> MessageDetails? {
         guard case .message(_, _, _, let details) = TranscriptLineParser.parse(line(s), includeSidechain: includeSidechain) else { return nil }
@@ -325,13 +329,52 @@ private func line(_ s: String) -> Data { Data(s.utf8) }
         #expect(TranscriptLineParser.parse(line(s)) == .taskRecords(closed: ["toolu_01AAA", "toolu_01BBB"]))
     }
 
-    @Test func theSummaryOutputFileAndTaskIdAreNeverKept() {
-        for (s, sidechain) in [(Self.queueOperation, false), (Self.attachment, true), (Self.metaUser, true), (Self.ack, false)] {
+    @Test func theSummaryOutputFileAndTheNotificationsTaskIdAreNeverKept() {
+        for (s, sidechain) in [(Self.queueOperation, false), (Self.attachment, true), (Self.metaUser, true)] {
             let kept = String(describing: TranscriptLineParser.parse(line(s), includeSidechain: sidechain))
             #expect(!kept.contains("exit code"))
             #expect(!kept.contains("private/tmp"))
             #expect(!kept.contains("b1x2y3z4w"))
         }
+        // The acknowledgement keeps its task id for TaskStop (F25), and nothing else of its text.
+        let ack = String(describing: TranscriptLineParser.parse(line(Self.ack)))
+        #expect(!ack.contains("private/tmp"))
+        #expect(!ack.contains("Output is being written"))
+    }
+
+    @Test func theAcknowledgementNamesTheTaskIdThatTaskStopUses() throws {
+        #expect(try #require(details(Self.ack)).backgroundAcks == [BackgroundAck(toolUseId: "toolu_01AAA", taskId: "b1x2y3z4w")])
+        let textBlock = #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01AAA","content":[{"type":"text","text":"Command running in background with ID: b1x2y3z4w. Output is being written to: /private/tmp/x.output"}]}]}}"#
+        #expect(try #require(details(textBlock)).backgroundAcks == [BackgroundAck(toolUseId: "toolu_01AAA", taskId: "b1x2y3z4w")])
+    }
+
+    @Test func aTaskStopCallNamesTheTaskItStops() throws {
+        let d = try #require(details(Self.stop))
+        #expect(d.stoppedTaskIds == ["b1x2y3z4w"])
+        #expect(d.backgroundStarts == [])
+        #expect(d.phase == .tool)
+    }
+
+    @Test func theStopsOwnResultIsNotReadAndItsCommandNeverKept() throws {
+        let d = try #require(details(Self.stopResult))
+        #expect(d.backgroundAcks == [])
+        #expect(d.stoppedTaskIds == [])
+        let kept = String(describing: TranscriptLineParser.parse(line(Self.stopResult)))
+        #expect(!kept.contains("hunter2"))
+        #expect(!kept.contains("npm"))
+    }
+
+    @Test func otherResultsAndMalformedTaskIdsAreDropped() {
+        let plain = Self.ack.replacingOccurrences(of: "Command running in background with ID: ", with: "Output: ")
+        #expect(details(plain)?.backgroundAcks == [])
+        let slash = Self.ack.replacingOccurrences(of: "ID: b1x2y3z4w.", with: "ID: b1x2/y3z4w.")
+        #expect(details(slash)?.backgroundAcks == [])
+        let long = Self.ack.replacingOccurrences(of: "b1x2y3z4w", with: String(repeating: "x", count: 65))
+        #expect(details(long)?.backgroundAcks == [])
+        let badStop = Self.stop.replacingOccurrences(of: "b1x2y3z4w", with: "b1x2 y3z4w")
+        #expect(details(badStop)?.stoppedTaskIds == [])
+        let otherTool = Self.stop.replacingOccurrences(of: #""name":"TaskStop""#, with: #""name":"TaskOutput""#)
+        #expect(details(otherTool)?.stoppedTaskIds == [])
     }
 
     @Test func anErroredToolResultIsCollectedAndAnAcknowledgementIsNot() {
@@ -413,6 +456,55 @@ private func line(_ s: String) -> Data { Data(s.utf8) }
     @Test func attachLeavesADeniedStartClosed() throws {
         let snap = try TranscriptTail(path: tempFile([R.start, R.launchError] + Self.completeTail)).attach()
         #expect(snap.backgroundStarts.isEmpty)
+    }
+
+    @Test func readNewCarriesAcknowledgementsAndStops() throws {
+        let url = try tempFile([])
+        let tail = TranscriptTail(path: url)
+        _ = try tail.attach()
+        let h = FileHandle(forWritingAtPath: url.path)!
+        h.seekToEndOfFile()
+        h.write(Data(([R.start, R.ack, R.stop, R.stopResult].joined(separator: "\n") + "\n").utf8))
+        h.closeFile()
+        let update = try #require(try tail.readNew())
+        #expect(update.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA"])
+        #expect(update.backgroundAcks == [BackgroundAck(toolUseId: "toolu_01AAA", taskId: "b1x2y3z4w")])
+        #expect(update.stoppedTaskIds == ["b1x2y3z4w"])
+    }
+
+    @Test func attachHandsOnTheTaskIdOfAnOpenStart() throws {
+        let snap = try TranscriptTail(path: tempFile([R.start, R.ack] + Self.completeTail)).attach()
+        #expect(snap.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA"])
+        #expect(snap.backgroundAcks == [BackgroundAck(toolUseId: "toolu_01AAA", taskId: "b1x2y3z4w")])
+    }
+
+    @Test func attachHandsAStoppedStartOnWithItsAcknowledgementAndStop() throws {
+        // The store applies stops: a stop in one file can name a task started in another.
+        let snap = try TranscriptTail(path: tempFile([R.start, R.ack, R.stop, R.stopResult] + Self.completeTail)).attach()
+        #expect(snap.backgroundStarts.map(\.toolUseId) == ["toolu_01AAA"])
+        #expect(snap.backgroundAcks == [BackgroundAck(toolUseId: "toolu_01AAA", taskId: "b1x2y3z4w")])
+        #expect(snap.stoppedTaskIds == ["b1x2y3z4w"])
+    }
+
+    @Test func attachFindsAnAcknowledgementAndAStopPastTheCompletePoint() throws {
+        // The start, its acknowledgement and its stop all sit behind 30 undecodable lines.
+        let filler = Array(repeating: "not json, never decoded", count: 30)
+        let tail = TranscriptTail(path: try tempFile([R.start, R.ack, R.stop] + filler + Self.completeTail), chunkSize: 128)
+        let snap = try tail.attach()
+        #expect(snap.backgroundAcks == [BackgroundAck(toolUseId: "toolu_01AAA", taskId: "b1x2y3z4w")])
+        #expect(snap.stoppedTaskIds == ["b1x2y3z4w"])
+        #expect(tail.decodeFailures == 0)
+    }
+
+    @MainActor @Test func aStoppedTaskFoundAtAttachNeverShows() throws {
+        let snap = try TranscriptTail(path: tempFile([R.start, R.ack, R.stop, R.stopResult] + Self.completeTail)).attach()
+        let store = SessionStore(testedVersion: "2.1.310")
+        store.replaceList([ListedSession(sessionId: "s1", pid: 1, cwd: "/Users/dev/work/my-app", kind: .interactive,
+                                         name: "my-app", startedAt: Date(timeIntervalSince1970: 1_794_215_000), status: "idle")],
+                          now: Date(timeIntervalSince1970: 1_794_215_300))
+        store.updateTranscript(id: "s1", update: snap, now: Date(timeIntervalSince1970: 1_794_215_400))
+        #expect(store.session(id: "s1")?.backgroundTasks == [])
+        #expect(store.backgroundCount == 0)
     }
 
     @Test func attachFindsAStartPastTheCompletePointAndDecodesNothingElseThere() throws {

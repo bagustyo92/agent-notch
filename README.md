@@ -18,12 +18,24 @@ sends, stops or resumes anything, installs no hooks, and makes no network calls.
 
 All media below is a scripted run on synthetic sessions (`AgentNotch --demo`), not real work.
 
+### New in 0.6.0
+
+| | |
+|---|---|
+| **Background children.** A turn can end while its fork or a background Bash command keeps running. The session moves to Done with `· 2 in background`, its children run on in violet, and each row goes the moment its child finishes. <br><img src="docs/media/background.gif" width="420" alt="A turn ends while its fork and a Bash server keep running: the session moves to Done with 2 in background and two violet Background rows, then each row folds as its child finishes"> | **Pinned in Done.** Such a session stays at the top of Done, outside its two-row limit, until its last child ends, and the header counts the children: `● 2 in background`. <br><img src="docs/media/background.png" width="420" alt="Done section: Finished 2m ago · 1 file · ran 3m · 2 in background, with a fork and a Bash row marked Background"> |
+
+**Motion at about 0% CPU.** The working dots, the needs-you glow and the thinking shimmer now run in
+Core Animation: the window server animates them and AgentNotch does nothing per frame. In 0.5.0 that
+motion cost up to 24% CPU while a session worked. The menu bar item's dots are still now; the notch
+keeps the motion.
+
+### Everything else
+
 | | |
 |---|---|
 | **Collapsed.** While anything runs, the notch grows a side on each edge: working count on the left, sessions that need you on the right. <br><img src="docs/media/notch-collapsed.png" width="420"> | **Live strip.** The notch opens on its own when a session starts working or needs you. <br><img src="docs/media/live-strip.gif" width="420"> |
 | **Hover for everything.** Every session, its model and effort, and its subagent tree. <br><img src="docs/media/expand-subagents.gif" width="420"> | **Hide details.** Repo, branch and tool name only, for screen sharing. <br><img src="docs/media/hide-details.gif" width="420"> |
 | **Menu bar.** The same rows plus settings, with the working and needs-you status in the bar. <br><img src="docs/media/dropdown.png" width="300"> | **Still frames.** <br><img src="docs/media/notch-expanded.png" width="420"> <br><img src="docs/media/notch-live-strip.png" width="420"> |
-| **Background.** A finished turn whose fork and Bash command still run stays pinned in Done, its children in violet. <br><img src="docs/media/background.png" width="420"> | |
 
 ## Install
 
@@ -86,7 +98,7 @@ To start it at login, open the menu bar item and switch on **Launch at login**.
 - **Background.** A turn can end while its subagents or background Bash commands (`run_in_background`)
   keep running. The session then stays at the top of Done with `· 2 in background`, its running
   children show under it as `Background` with a violet ring, and the header counts them:
-  `2 in background`. A child goes as soon as it finishes. Background work never opens the notch.
+  `2 in background`. A child goes as soon as it finishes, and a background command also when it is stopped. Background work never opens the notch.
 - **Click a row.**
   - Cursor: opens that exact chat tab in its window.
   - VS Code: brings VS Code forward.
@@ -150,7 +162,7 @@ Handy flags while developing:
 .build/debug/AgentNotch --dump          # print the current rows once (titles and activity hidden)
 .build/debug/AgentNotch --watch 30      # print row changes with timestamps for 30 s
 .build/debug/AgentNotch --dump --full   # same, with titles and full activity (do not paste publicly)
-.build/debug/AgentNotch --demo          # replay synthetic sessions, for screenshots (--demo dropdown for the menu bar card, --demo menubar <dir> for the bar item)
+.build/debug/AgentNotch --demo          # replay synthetic sessions, for screenshots (--demo dropdown for the menu bar card, --demo background for the background-children clip, --demo menubar <dir> for the bar item)
 ```
 
 ## License

@@ -49,8 +49,9 @@ New behaviour goes into Core behind a small public function first, with a test, 
 The session registry and transcript formats are internal to Claude Code and change between
 versions. When something breaks after an update, add a synthetic fixture that reproduces the new
 shape, make the parser tolerate it, and update the "Verified facts" table in `docs/DESIGN.md`.
-The background task records in `TranscriptTail.swift` (`run_in_background` starts, `<task-notification>`
-closes, F22 and F23) are the most likely to drift.
+The background task records in `TranscriptTail.swift` (`run_in_background` starts, their
+`Command running in background with ID` acknowledgements, `<task-notification>` closes and `TaskStop`
+calls; F22, F23, F25) are the most likely to drift.
 When Claude Code adds a model, update the model table in `Sources/AgentNotchCore/ContextWindow.swift`
 and F20 in `docs/DESIGN.md`.
 
@@ -59,7 +60,8 @@ and F20 in `docs/DESIGN.md`.
 - One topic per PR. Describe what changed and how you checked it (tests, `--dump`, a screenshot).
 - `scripts/test.sh` must pass; CI runs it on every PR.
 - Keep screenshots free of real session titles, file names or anything private. `.build/debug/AgentNotch --demo`
-  replays synthetic sessions in front of a clean backdrop (`--demo dropdown` for the menu bar card); it
+  replays synthetic sessions in front of a clean backdrop (`--demo dropdown` for the menu bar card,
+  `--demo background` for the background-children clip); it
   prints the screen rect to capture, e.g. `screencapture -x -R<rect> shot.png`. Park the mouse away from the notch first.
   `--demo menubar <dir>` steps the real menu bar item through its states and writes one PNG per state to `<dir>`
   (macOS draws status items out of process, so `screencapture` cannot reach them).
