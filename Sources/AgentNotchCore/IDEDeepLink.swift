@@ -27,16 +27,16 @@ public struct IDEWindow: Sendable, Equatable {
 /// parent must be a Cursor helper, and that host must be trusted (D43, `isTrusted`).
 ///
 /// Otherwise a click can still raise the session's window: `/focus?windowId=<n>` makes Cursor
-/// focus window n, and the extension ignores the unknown path (F27). That needs a remembered
+/// focus window n, and the extension ignores the unknown path (F28). That needs a remembered
 /// window whose IDE main process still runs and whose window still shows the session's workspace.
 public enum IDEDeepLink {
-    /// An IDE whose URL router is verified to route `windowId=` exactly (F18, F27).
+    /// An IDE whose URL router is verified to route `windowId=` exactly (F18, F28).
     struct IDEApp: Sendable {
         /// URL scheme of the extension's links.
         let scheme: String
         /// Path fragment shared by the app's main process and its helpers.
         let bundle: String
-        /// Path suffix of the main process, the parent of every extension host (F26).
+        /// Path suffix of the main process, the parent of every extension host (F27).
         let main: String
     }
 
@@ -102,7 +102,7 @@ public enum IDEDeepLink {
         public var window: IDEWindow?
     }
 
-    /// One extension host of one IDE window, parsed from its process title (F18, F26):
+    /// One extension host of one IDE window, parsed from its process title (F18, F27):
     /// `… extension-host (<role>) <workspace> [<windowId>-<counter>]`. Newer Cursor builds start
     /// `retrieval`, `always-local` and `agent-exec` hosts next to each window's `user` host; the
     /// Claude Code extension runs in the `user` one. `counter` grows across the whole IDE main
@@ -159,7 +159,7 @@ public enum IDEDeepLink {
         return URL(string: "\(scheme)://anthropic.claude-code/open?session=\(sessionId)&windowId=\(windowId)")
     }
 
-    /// Raises window n and nothing else (F27). Never carries a session.
+    /// Raises window n and nothing else (F28). Never carries a session.
     public static func focusURL(source: Source, windowId: Int) -> URL? {
         guard let scheme = apps[source]?.scheme, windowId > 0 else { return nil }
         return URL(string: "\(scheme)://anthropic.claude-code/focus?windowId=\(windowId)")

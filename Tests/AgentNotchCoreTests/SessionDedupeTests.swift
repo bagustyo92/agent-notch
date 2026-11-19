@@ -8,7 +8,7 @@ private func entry(_ id: String, pid: Int32?, startedAt: Date = t0) -> ListedSes
     ListedSession(sessionId: id, pid: pid, cwd: "/Users/dev/work/\(id)", kind: .interactive, name: id, startedAt: startedAt, status: "idle")
 }
 
-/// One session id listed with two live processes (F28): the row stands for the reachable one (D43).
+/// One session id listed with two live processes (F29): the row stands for the reachable one (D43).
 @Suite struct SessionDedupePicking {
     let starts: [Int32: Date] = [3910: t0, 51965: t0.addingTimeInterval(3360), 7000: t0.addingTimeInterval(60)]
 

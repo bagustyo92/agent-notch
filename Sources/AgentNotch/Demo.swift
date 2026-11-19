@@ -2,7 +2,7 @@ import AgentNotchCore
 import AppKit
 import SwiftUI
 
-/// `AgentNotch --demo [notch|dropdown|menubar|bench-…]`: a scripted run on synthetic sessions (paths under
+/// `AgentNotch --demo [notch|dropdown|background|menubar|bench-…]`: a scripted run on synthetic sessions (paths under
 /// /Users/dev, R6) in front of a clean backdrop, for README media that must never show a real
 /// session. It does not start the monitor and never reads ~/.claude (R1, R5). `menubar` has no
 /// backdrop: it steps the real menu bar item through its states and writes a PNG of each.
@@ -48,6 +48,8 @@ final class DemoDriver {
     private let notch: NotchPanelController?
     private let statusItem: StatusItemController?
     private var states: [String: State] = [:]
+    /// The sessions a scene lists; nil lists every spec.
+    private var cast: Set<String>?
     private var contextTokens: [String: Int] = [:]
     private var tickCount = 0
     /// `--demo menubar <dir>` writes one PNG per state there.
@@ -79,7 +81,11 @@ final class DemoDriver {
         print("STAGE \(Int(stage.captureRect.minX)),\(Int(stage.captureRect.minY)),\(Int(stage.captureRect.width)),\(Int(stage.captureRect.height))")
         fflush(stdout)
         Task { @MainActor in
-            if scene == "dropdown" { await driver.runDropdown() } else { await driver.runNotch() }
+            switch scene {
+            case "dropdown": await driver.runDropdown()
+            case "background": await driver.runBackground()
+            default: await driver.runNotch()
+            }
         }
         retained = [stage]
         return driver
@@ -160,6 +166,32 @@ final class DemoDriver {
         while true { await wait(2) }
     }
 
+    /// The README clip of D41, about 18 s with the notch expanded throughout. One session keeps working
+    /// while another's turn ends with a fork and a Bash server still running: it moves to Done with
+    /// `· 2 in background`, then each child folds as it finishes and the chip goes. The story is the
+    /// Cursor session, so no `claude --bg` row says "Background" for another reason.
+    private func runBackground() async {
+        cast = ["demo-storefront", "demo-billing"]
+        seed()
+        let now = Date()
+        set("demo-storefront", .busy, phase: .tool, tool: 0, at: now.addingTimeInterval(-200))
+        set("demo-storefront", .busy, phase: .tool, tool: 2, at: now.addingTimeInterval(-100))   // 2 files for the summary
+        spawn("bg1", "fork", "Run the release checklist", "Bash · Run e2e suite", .tool, at: now.addingTimeInterval(-170))
+        startTask("toolu_demo_api", "Run local API server", session: "demo-storefront", at: now.addingTimeInterval(-150))
+        set("demo-billing", .busy, phase: .thinking)
+        notch?.expand()
+        await wait(4)
+        set("demo-storefront", .idle)                                          // the turn ends; both children run on
+        await wait(6)
+        closeTask("toolu_demo_api", session: "demo-storefront")                // the server stops: its row folds
+        await wait(3.5)
+        finishSubagent("bg1")                                                  // the fork finishes: the chip goes
+        await wait(4.5)
+        print("DEMO DONE")
+        fflush(stdout)
+        exit(0)
+    }
+
     /// `--demo bench-<working|waiting|thinking>[-strip]`: hold one state forever, the notch collapsed
     /// unless `-strip`, so its CPU can be measured (D42); `bench-idle` holds every session idle.
     /// Measure with `ps -o time= -p <pid>` over 20 s after an 8 s settle.
@@ -237,7 +269,7 @@ final class DemoDriver {
     }
 
     private func apply(at now: Date = Date()) {
-        let listed = Self.specs.map { spec -> ListedSession in
+        let listed = Self.specs.filter { cast?.contains($0.id) ?? true }.map { spec -> ListedSession in
             var status: String?, state: String?, why: String?, needs: String?
             switch states[spec.id] ?? .idle {
             case .idle: status = "idle"; state = "idle"

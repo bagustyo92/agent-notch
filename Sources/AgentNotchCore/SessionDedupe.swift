@@ -1,7 +1,7 @@
 import Foundation
 
 /// D43: one row per session id. `claude agents --json` can list one session under two live
-/// processes, e.g. a chat resumed in a second IDE window while the first process lingers (F28).
+/// processes, e.g. a chat resumed in a second IDE window while the first process lingers (F29).
 /// The row must stand for one process, and its `pid` and `startedAt` must come from the same entry.
 public enum SessionDedupe {
     /// Keeps the first position of each session id. For an id listed more than once it picks, in

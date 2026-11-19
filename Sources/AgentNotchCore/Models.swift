@@ -155,9 +155,12 @@ public struct BackgroundTask: Identifiable, Sendable, Equatable {
     /// `Bash · Run e2e suite`, masked; never the command (D11).
     public var activity: Activity
     public var startedAt: Date
+    /// The id `TaskStop` names, from the launch acknowledgement; nil until that is read (F25).
+    public var taskId: String?
 
-    public init(id: String, ownerAgentId: String? = nil, activity: Activity, startedAt: Date) {
+    public init(id: String, ownerAgentId: String? = nil, activity: Activity, startedAt: Date, taskId: String? = nil) {
         self.id = id; self.ownerAgentId = ownerAgentId; self.activity = activity; self.startedAt = startedAt
+        self.taskId = taskId
     }
 }
 

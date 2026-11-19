@@ -15,6 +15,15 @@ public struct BackgroundStart: Sendable, Equatable {
     }
 }
 
+/// The acknowledging `tool_result` of a background `Bash` call, `Command running in background with
+/// ID: <taskId>. …`: its task id is the one `TaskStop` names (F25). The rest of the text is never read.
+public struct BackgroundAck: Sendable, Equatable {
+    public var toolUseId: String
+    public var taskId: String
+
+    public init(toolUseId: String, taskId: String) { self.toolUseId = toolUseId; self.taskId = taskId }
+}
+
 /// The per-line facts beyond the activity: phase, model, effort, the `Agent` calls a line starts,
 /// its context size, the files it edits and its background-task records (D29, D30, D33, D38, D39, D41).
 public struct MessageDetails: Sendable, Equatable {
@@ -33,15 +42,20 @@ public struct MessageDetails: Sendable, Equatable {
     public var closedToolUseIds: [String] = []
     /// `tool_use_id` of each `tool_result` with `is_error: true`: a launch that failed or was denied.
     public var erroredToolUseIds: [String] = []
+    /// Background launches this line acknowledges, with the task id `TaskStop` uses (F25).
+    public var backgroundAcks: [BackgroundAck] = []
+    /// `input.task_id` of each `TaskStop` call: no notification follows a stop (F25).
+    public var stoppedTaskIds: [String] = []
     public init(
         phase: Phase? = nil, model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = [],
         contextTokens: Int? = nil, editedPathHashes: [Int] = [], backgroundStarts: [BackgroundStart] = [],
-        closedToolUseIds: [String] = [], erroredToolUseIds: [String] = []
+        closedToolUseIds: [String] = [], erroredToolUseIds: [String] = [], backgroundAcks: [BackgroundAck] = [],
+        stoppedTaskIds: [String] = []
     ) {
         self.phase = phase; self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds
         self.contextTokens = contextTokens; self.editedPathHashes = editedPathHashes
         self.backgroundStarts = backgroundStarts; self.closedToolUseIds = closedToolUseIds
-        self.erroredToolUseIds = erroredToolUseIds
+        self.erroredToolUseIds = erroredToolUseIds; self.backgroundAcks = backgroundAcks; self.stoppedTaskIds = stoppedTaskIds
     }
 }
 
@@ -59,7 +73,8 @@ public enum TranscriptLine: Sendable, Equatable {
 /// `timestamp`, `content` (of a `queue-operation` line, whatever its `operation`), `attachment.prompt`,
 /// `message.{model,content[].{type,id,name,input,text,tool_use_id,is_error}}` and the three input
 /// counters of `message.usage` (F6, F19, F22, F23). Of a task notification it reads `tool-use-id` and
-/// `status` only. Never retains the line.
+/// `status` only; of a `tool_result`'s `content`, only the task id after a launch acknowledgement's
+/// lead-in (F25). Never retains the line.
 public enum TranscriptLineParser {
     /// `includeSidechain` is for subagent transcripts, whose every line is a sidechain (D33).
     public static func parse(_ line: Data, includeSidechain: Bool = false) -> TranscriptLine? {
@@ -81,6 +96,7 @@ public enum TranscriptLineParser {
                 details.phase = .thinking
                 details.closedToolUseIds = notificationIds(inContent: message?["content"])
                 details.erroredToolUseIds = erroredToolUseIds(in: message?["content"])
+                details.backgroundAcks = backgroundAcks(in: message?["content"])
                 return .message(role: role, branch: branch, activity: nil, details: details)
             }
             details.phase = phase(in: message)
@@ -89,6 +105,7 @@ public enum TranscriptLineParser {
             details.contextTokens = contextTokens(in: message)
             details.editedPathHashes = editedPathHashes(in: message)
             details.backgroundStarts = backgroundStarts(in: message, timestamp: dict["timestamp"])
+            details.stoppedTaskIds = stoppedTaskIds(in: message)
             return .message(role: role, branch: branch, activity: activity(in: message), details: details)
         case "queue-operation":
             let closed = notificationIds(in: dict["content"] as? String)
@@ -146,6 +163,44 @@ public enum TranscriptLineParser {
             guard let block = block as? [String: Any], block["type"] as? String == "tool_result",
                   (block["is_error"] as? Bool) == true else { return nil }
             return token(block["tool_use_id"])
+        }
+    }
+
+    /// How Claude Code acknowledges a background launch (F22, F25).
+    static let ackLeadIn = "Command running in background with ID: "
+    /// The tool that stops a background task by the acknowledgement's id, with no notification (F25).
+    static let stopToolName = "TaskStop"
+
+    /// Launch acknowledgements: a `tool_result` whose text (a string, or its first `text` block)
+    /// starts with `ackLeadIn`. Only the id up to the next `.` or space is read, through `token`;
+    /// the output path after it never is (R4).
+    static func backgroundAcks(in content: Any?) -> [BackgroundAck] {
+        guard let blocks = content as? [Any] else { return [] }
+        return blocks.compactMap { block in
+            guard let block = block as? [String: Any], block["type"] as? String == "tool_result",
+                  let toolUseId = token(block["tool_use_id"]), let text = resultText(block["content"]),
+                  text.hasPrefix(ackLeadIn) else { return nil }
+            // One character past the longest token, so an overlong id fails `token` without a long scan.
+            let id = text.dropFirst(ackLeadIn.count).prefix(tokenMaxLength + 1).prefix { $0 != "." && !$0.isWhitespace }
+            return token(String(id)).map { BackgroundAck(toolUseId: toolUseId, taskId: $0) }
+        }
+    }
+
+    private static func resultText(_ content: Any?) -> String? {
+        if let text = content as? String { return text }
+        return (content as? [Any])?.lazy.compactMap { block -> String? in
+            guard let block = block as? [String: Any], block["type"] as? String == "text" else { return nil }
+            return block["text"] as? String
+        }.first
+    }
+
+    /// `input.task_id` of each `TaskStop` call, through `token` (F25).
+    static func stoppedTaskIds(in message: [String: Any]?) -> [String] {
+        guard let blocks = message?["content"] as? [Any] else { return [] }
+        return blocks.compactMap { block in
+            guard let block = block as? [String: Any], block["type"] as? String == "tool_use",
+                  block["name"] as? String == stopToolName else { return nil }
+            return token((block["input"] as? [String: Any])?["task_id"])
         }
     }
 
@@ -218,10 +273,12 @@ public enum TranscriptLineParser {
         }
     }
 
+    static let tokenMaxLength = 64
+
     /// Short machine tokens only (model ids, effort levels, tool_use ids). Anything else, including
     /// `<synthetic>` placeholders, is dropped rather than shown.
     static func token(_ any: Any?) -> String? {
-        guard let s = any as? String, !s.isEmpty, s.count <= 64,
+        guard let s = any as? String, !s.isEmpty, s.count <= tokenMaxLength,
               s.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.[]".contains($0)) }) else { return nil }
         return s
     }
@@ -242,25 +299,30 @@ public struct TranscriptUpdate: Sendable, Equatable {
     /// Every edit in this read, oldest first. `attach` leaves it empty: a back-scan cannot tell
     /// which turn an edit belongs to (D39).
     public var editedPathHashes: [Int] = []
-    /// Background Bash starts, closes and launch errors in this read, oldest first (D41). `attach`
-    /// returns only the starts no close or error in its window matched, plus the closes it saw (a
-    /// close in one file can match a start in another); it leaves `erroredToolUseIds` empty, since a
-    /// launch error always sits in the same file after its start.
+    /// Background Bash starts, closes, launch errors, acknowledgements and `TaskStop` calls in this
+    /// read, oldest first (D41, F25). `attach` returns only the starts no close or error in its window
+    /// matched, with their acknowledgements, plus every close and stop it saw: a close or a stop in one
+    /// file can match a start in another, so the store applies them. It leaves `erroredToolUseIds`
+    /// empty, since a launch error always sits in the same file after its start.
     public var backgroundStarts: [BackgroundStart] = []
     public var closedToolUseIds: [String] = []
     public var erroredToolUseIds: [String] = []
+    public var backgroundAcks: [BackgroundAck] = []
+    public var stoppedTaskIds: [String] = []
     public var unavailable: Bool = false
     public init(
         aiTitle: String? = nil, branch: String? = nil, activity: Activity? = nil, phase: Phase? = nil,
         model: String? = nil, effort: String? = nil, spawnedToolUseIds: [String] = [], contextTokens: Int? = nil,
         editedPathHashes: [Int] = [], backgroundStarts: [BackgroundStart] = [], closedToolUseIds: [String] = [],
-        erroredToolUseIds: [String] = [], unavailable: Bool = false
+        erroredToolUseIds: [String] = [], backgroundAcks: [BackgroundAck] = [], stoppedTaskIds: [String] = [],
+        unavailable: Bool = false
     ) {
         self.aiTitle = aiTitle; self.branch = branch; self.activity = activity; self.phase = phase
         self.model = model; self.effort = effort; self.spawnedToolUseIds = spawnedToolUseIds
         self.contextTokens = contextTokens; self.editedPathHashes = editedPathHashes
         self.backgroundStarts = backgroundStarts; self.closedToolUseIds = closedToolUseIds
-        self.erroredToolUseIds = erroredToolUseIds; self.unavailable = unavailable
+        self.erroredToolUseIds = erroredToolUseIds; self.backgroundAcks = backgroundAcks
+        self.stoppedTaskIds = stoppedTaskIds; self.unavailable = unavailable
     }
 }
 
@@ -301,6 +363,7 @@ public final class TranscriptTail {
         var complete: Bool { haveTitle && haveBranch && haveActivity && havePhase && haveModel && haveEffort && haveTokens }
         // Newest first while scanning backwards.
         var starts: [BackgroundStart] = [], closed: [String] = [], errored = Set<String>()
+        var acks: [BackgroundAck] = [], stopped: [String] = []
         var carry: [UInt8] = []
         var end = size
         while end > 0, Int(size - end) < maxBackscan {
@@ -336,6 +399,8 @@ public final class TranscriptTail {
                     starts += details.backgroundStarts.reversed()
                     closed += details.closedToolUseIds.reversed()
                     errored.formUnion(details.erroredToolUseIds)
+                    acks += details.backgroundAcks.reversed()
+                    stopped += details.stoppedTaskIds.reversed()
                 case .taskRecords(let ids):
                     closed += ids.reversed()
                 case .ignored, nil:
@@ -344,18 +409,25 @@ public final class TranscriptTail {
             }
             end = start
         }
-        // Open tasks: the starts in the window minus the closes and launch errors in it.
+        // Open tasks: the starts in the window minus the closes and launch errors in it. Stops are left
+        // to the store, with the acknowledgements that give these starts their task ids (F25).
         let ended = errored.union(closed)
         found.backgroundStarts = starts.reversed().filter { !ended.contains($0.toolUseId) }
+        let open = Set(found.backgroundStarts.map(\.toolUseId))
+        found.backgroundAcks = acks.reversed().filter { open.contains($0.toolUseId) }
         found.closedToolUseIds = closed.reversed()
+        found.stoppedTaskIds = stopped.reversed()
         offset = size
         found.unavailable = unavailable
         return found
     }
 
-    /// Byte needles of the lines that can start or end a background task (F22, F23). Claude Code
-    /// writes compact JSON, so `"is_error":true` has no space.
-    private static let taskNeedles: [[UInt8]] = ["run_in_background", "task-notification", #""is_error":true"#].map { Array($0.utf8) }
+    /// Byte needles of the lines that can start, acknowledge or end a background task (F22, F23,
+    /// F25). Claude Code writes compact JSON, so `"is_error":true` has no space.
+    private static let taskNeedles: [[UInt8]] = [
+        "run_in_background", "task-notification", #""is_error":true"#, TranscriptLineParser.ackLeadIn,
+        #""name":""# + TranscriptLineParser.stopToolName + #"""#,
+    ].map { Array($0.utf8) }
 
     /// A cheap pre-filter, so the back-scan past the newest fields decodes only candidate lines (R7).
     static func mayHoldTaskRecord(_ bytes: ArraySlice<UInt8>) -> Bool {
@@ -402,6 +474,8 @@ public final class TranscriptTail {
                 update.backgroundStarts += details.backgroundStarts
                 update.closedToolUseIds += details.closedToolUseIds
                 update.erroredToolUseIds += details.erroredToolUseIds
+                update.backgroundAcks += details.backgroundAcks
+                update.stoppedTaskIds += details.stoppedTaskIds
             case .taskRecords(let closed): update.closedToolUseIds += closed
             case .ignored, nil: break
             }

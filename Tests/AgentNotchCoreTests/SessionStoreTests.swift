@@ -70,7 +70,7 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         #expect(a.status == .idle)
     }
 
-    /// Regression for the live `link=-` (F28): the row took the second process's pid but kept the
+    /// Regression for the live `link=-` (F29): the row took the second process's pid but kept the
     /// first one's `startedAt`, so the deep-link start check always failed (D43).
     @Test func newPidBringsItsOwnStartAndIsProbedAgain() {
         store.replaceList([listed("s", pid: 3910, status: "idle", startedAt: t0)], now: t0)
@@ -566,5 +566,78 @@ private func listed(_ id: String, pid: Int32? = 1, kind: SessionKind = .interact
         store.updateTranscript(id: "a", update: TranscriptUpdate(closedToolUseIds: ids), now: at(1))
         store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_0"), start("toolu_1")]), now: at(2))
         #expect(tasks() == ["toolu_0"])                                         // the oldest close was let go
+    }
+
+    // MARK: TaskStop (F25): no notification follows it, so the stop itself closes the task.
+
+    private func ack(_ id: String, _ taskId: String) -> BackgroundAck { BackgroundAck(toolUseId: id, taskId: taskId) }
+
+    @Test func theAcknowledgementGivesTheTaskItsTaskId() throws {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")]), now: at(1))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundAcks: [ack("toolu_1", "b1")]), now: at(2))   // a later read
+        #expect(try #require(store.session(id: "a")?.backgroundTasks.first).taskId == "b1")
+    }
+
+    @Test func aTaskStoppedWithTaskStopClosesAndUnpinsItsParent() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")], backgroundAcks: [ack("toolu_1", "b1")]), now: at(1))
+        store.replaceList([listed("a", status: "idle")], now: at(2))
+        #expect(store.backgroundCount == 1)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(stoppedTaskIds: ["b1"]), now: at(3))
+        #expect(tasks().isEmpty)
+        #expect(store.backgroundCount == 0)
+    }
+
+    @Test func aStartItsAcknowledgementAndItsStopInOneReadLeaveNoTask() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(
+            backgroundStarts: [start("toolu_1")], backgroundAcks: [ack("toolu_1", "b1")], stoppedTaskIds: ["b1"]
+        ), now: at(1))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aStopReadBeforeItsAcknowledgementStillCloses() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        // The main session stops a task its subagent started, and the main transcript is read first.
+        store.updateTranscript(id: "a", update: TranscriptUpdate(stoppedTaskIds: ["b1"]), now: at(1))
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", TranscriptUpdate(
+            backgroundStarts: [start("toolu_1")], backgroundAcks: [ack("toolu_1", "b1")]
+        )), now: at(2))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aStopInASubagentTranscriptClosesTheTaskWhereverItStarted() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(backgroundStarts: [start("toolu_1")], backgroundAcks: [ack("toolu_1", "b1")]), now: at(1))
+        store.updateSubagent(sessionId: "a", update: subagentRead("f", TranscriptUpdate(stoppedTaskIds: ["b1"])), now: at(2))
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func aStopClosesOnlyItsOwnTask() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(
+            backgroundStarts: [start("toolu_1"), start("toolu_2")], backgroundAcks: [ack("toolu_1", "b1"), ack("toolu_2", "b2")]
+        ), now: at(1))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(stoppedTaskIds: ["b2", "a-subagent-or-unknown-task"]), now: at(2))
+        #expect(tasks() == ["toolu_1"])
+    }
+
+    @Test func aStoppedTaskIsNotReAddedByALaterRead() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        let read = TranscriptUpdate(backgroundStarts: [start("toolu_1")], backgroundAcks: [ack("toolu_1", "b1")])
+        store.updateTranscript(id: "a", update: read, now: at(1))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(stoppedTaskIds: ["b1"]), now: at(2))
+        store.updateTranscript(id: "a", update: read, now: at(3))               // e.g. a re-attach after truncation
+        #expect(tasks().isEmpty)
+    }
+
+    @Test func stopsAreRememberedForTheNewest512Only() {
+        store.replaceList([listed("a", status: "busy")], now: t0)
+        store.updateTranscript(id: "a", update: TranscriptUpdate(stoppedTaskIds: (0...512).map { "b\($0)" }), now: at(1))
+        store.updateTranscript(id: "a", update: TranscriptUpdate(
+            backgroundStarts: [start("toolu_0"), start("toolu_1")], backgroundAcks: [ack("toolu_0", "b0"), ack("toolu_1", "b1")]
+        ), now: at(2))
+        #expect(tasks() == ["toolu_0"])                                         // the oldest stop was let go
     }
 }
