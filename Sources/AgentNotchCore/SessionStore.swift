@@ -100,7 +100,13 @@ public final class SessionStore {
             seen.insert(entry.sessionId)
             let status = Status.from(entry)
             if var existing = byId[entry.sessionId] {
-                existing.pid = entry.pid ?? existing.pid
+                // D43: a new process for the session brings its own start time, and its source and
+                // tty are probed again. A row's pid and startedAt always come from one entry.
+                if let pid = entry.pid, pid != existing.pid {
+                    existing.pid = pid
+                    existing.startedAt = entry.startedAt
+                    if existing.source != .background { existing.source = .unknown; existing.tty = nil }
+                }
                 existing.cwd = entry.cwd.isEmpty ? existing.cwd : entry.cwd
                 existing.name = entry.name
                 existing.kind = entry.kind
@@ -137,6 +143,14 @@ public final class SessionStore {
         guard var s = byId[id] else { return }
         s.source = source
         s.tty = tty
+        byId[id] = s
+        publish()
+    }
+
+    /// The IDE window a session was last seen in under a trusted host (D43).
+    public func setIDEWindow(id: String, _ window: IDEWindow) {
+        guard var s = byId[id], s.ideWindow != window else { return }
+        s.ideWindow = window
         byId[id] = s
         publish()
     }

@@ -52,6 +52,8 @@ shape, make the parser tolerate it, and update the "Verified facts" table in `do
 The background task records in `TranscriptTail.swift` (`run_in_background` starts, their
 `Command running in background with ID` acknowledgements, `<task-notification>` closes and `TaskStop`
 calls; F22, F23, F25) are the most likely to drift.
+The Cursor extension-host title shape parsed in `IDEDeepLink.swift` (F27) can drift with Cursor
+updates; `--dump` shows `trust=` and `link=` for each session.
 When Claude Code adds a model, update the model table in `Sources/AgentNotchCore/ContextWindow.swift`
 and F20 in `docs/DESIGN.md`.
 

@@ -122,8 +122,14 @@ enum DebugDump {
         // Bash and its age; the description only under --full (D41).
         let tasks = s.backgroundTasks.map { "\(full ? $0.activity.full : $0.activity.brief):\(ElapsedFormatter.precise(Date().timeIntervalSince($0.startedAt)))" }
             .joined(separator: ",")
-        let link = IDEDeepLink.resolve(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt)?.absoluteString ?? "-"
-        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)"
+        // D43: the link a click would send, the remembered window, and whether the host is trusted.
+        let hosts = IDEDeepLink.hosts(source: s.source)
+        let link = IDEDeepLink.target(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt,
+                                      isLive: s.status != .done, remembered: s.ideWindow, hosts: hosts).url?.absoluteString ?? "-"
+        let window = s.ideWindow.map { String($0.windowId) } ?? "-"
+        let trust = IDEDeepLink.locate(source: s.source, pid: s.pid, startedAt: s.startedAt, hosts: hosts)
+            .map { $0.trusted ? "yes" : "no" } ?? "-"
+        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)\twindow=\(window)\ttrust=\(trust)"
     }
 
     static func stamp() -> String {

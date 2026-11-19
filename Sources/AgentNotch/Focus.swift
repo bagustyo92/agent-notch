@@ -13,9 +13,10 @@ extension Source {
     }
 }
 
-/// D14, D25, D27: focus a session's window. Read-only otherwise (R1).
+/// D14, D25, D27, D43: focus a session's window. Read-only otherwise (R1).
 @MainActor
 enum Focus {
+    static let windowNotFound = "Couldn't find this session's window"
 
     /// Returns a message to display instead when there is nothing to focus.
     static func focus(_ session: Session) -> String? {
@@ -26,15 +27,19 @@ enum Focus {
             focusTerminal(tty: session.tty)
             return nil
         case .cursor, .vscode:
-            // D28: open the exact chat in its own window when that window is known; otherwise
-            // just bring the IDE forward (D27).
-            if session.status != .done,
-               let link = IDEDeepLink.resolve(source: session.source, sessionId: session.id, pid: session.pid, startedAt: session.startedAt) {
-                NSWorkspace.shared.open(link)
-            } else if let bundleId = session.source.bundleId {
-                activate(bundleId: bundleId)
+            // D43: the exact chat in its own trusted window (D28); else only raise the window it was
+            // last seen in; else bring the IDE forward (D27) and say so.
+            let target = IDEDeepLink.target(
+                source: session.source, sessionId: session.id, pid: session.pid, startedAt: session.startedAt,
+                isLive: session.status != .done, remembered: session.ideWindow
+            )
+            if let url = target.url {
+                NSWorkspace.shared.open(url)
+                return nil
             }
-            return nil
+            if let bundleId = session.source.bundleId { activate(bundleId: bundleId) }
+            // VS Code has no window routing at all (D28); the message is for Cursor's misses.
+            return IDEDeepLink.supports(session.source) ? Self.windowNotFound : nil
         case .unknown:
             if session.tty != nil { focusTerminal(tty: session.tty); return nil }
             return session.pid == nil ? "claude attach \(session.id)" : "No window found for this session"

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+- **Clicking a Cursor row opens the right window when several are open.** Before, a click could raise a different project's window: either the link pointed at a window that had since opened another project, or no link was built and AgentNotch only activated Cursor, which raises the last active window.
+- A session listed under two processes (resumed in a second window while the first lingers) now stands for the process in the window that holds it, and its start time comes from that same process. This was why some idle rows got no link at all.
+- The exact-chat link is sent only when the session's extension host is still the current one for its window. A host left over from a window's earlier project, or the older of two windows on the same project, never gets it, because Cursor would resume the chat in the wrong window as a second process.
+- A finished row, or one whose window can't be trusted any more, now raises the window the session was last seen in (`cursor://anthropic.claude-code/focus?windowId=<n>`, which opens no tab), as long as that Cursor is still running and the window still shows the project. Otherwise AgentNotch activates Cursor and says "Couldn't find this session's window".
+- `--dump` prints what a click would send in `link=`, plus `window=` (the remembered window) and `trust=`.
+- VS Code still only activates the app: it gives no reliable way to tell its windows apart (details in D28).
+
 ## 0.6.0
 
 - **Background children.** When a turn ends while its subagents or background Bash commands (`run_in_background`) keep running, the session no longer reads plain Idle. It stays in Done, pinned to the top, with `· 2 in background` in violet, and its running children show under it in a new Background state: a static violet ring and `Background · <activity>`. The header adds `● 2 in background`, and "All quiet" shows only when nothing runs at all. Background work never opens the notch and leaves the collapsed notch and the menu bar item alone.
