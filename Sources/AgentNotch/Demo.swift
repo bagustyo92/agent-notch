@@ -63,7 +63,7 @@ final class DemoDriver {
     }
 
     /// Opens the backdrop window and starts the chosen scene. Prints the screen rect to capture.
-    static func start(scene: String, store: SessionStore, settings: Settings, notch: NotchPanelController?,
+    static func start(scene: String, store: SessionStore, settings: Settings, updater: Updater, notch: NotchPanelController?,
                       statusItem: StatusItemController?) -> DemoDriver {
         let driver = DemoDriver(store: store, settings: settings, notch: notch, statusItem: statusItem)
         if scene == "menubar" {
@@ -76,7 +76,7 @@ final class DemoDriver {
             Task { @MainActor in await driver.runBench(scene) }
             return driver
         }
-        let stage = DemoStage(scene: scene, store: store, settings: settings)
+        let stage = DemoStage(scene: scene, store: store, settings: settings, updater: updater)
         stage.show()
         print("STAGE \(Int(stage.captureRect.minX)),\(Int(stage.captureRect.minY)),\(Int(stage.captureRect.width)),\(Int(stage.captureRect.height))")
         fflush(stdout)
@@ -397,7 +397,7 @@ final class DemoStage {
     private let window: NSWindow
     let captureRect: CGRect
 
-    init(scene: String, store: SessionStore, settings: Settings) {
+    init(scene: String, store: SessionStore, settings: Settings, updater: Updater) {
         let screen = NSScreen.screens.first ?? NSScreen.main!
         let notch = NotchGeometry.notchRect(on: screen)
         let size = scene == "dropdown" ? CGSize(width: 520, height: 840) : CGSize(width: 900, height: 640)
@@ -414,7 +414,7 @@ final class DemoStage {
         window.ignoresMouseEvents = true
         window.isReleasedWhenClosed = false
         let view: AnyView = scene == "dropdown"
-            ? AnyView(DemoDropdownStage(store: store, settings: settings))
+            ? AnyView(DemoDropdownStage(store: store, settings: settings, updater: updater))
             : AnyView(DemoNotchStage(store: store, barHeight: notch?.height ?? 32))
         window.contentView = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
     }
@@ -459,6 +459,7 @@ private struct DemoNotchStage: View {
 private struct DemoDropdownStage: View {
     let store: SessionStore
     let settings: Settings
+    let updater: Updater
     private let popoverState: PopoverState = {
         let state = PopoverState()
         state.isShown = true
@@ -468,7 +469,7 @@ private struct DemoDropdownStage: View {
     var body: some View {
         ZStack {
             demoWallpaper
-            PopoverView(store: store, settings: settings, popoverState: popoverState)
+            PopoverView(store: store, settings: settings, popoverState: popoverState, updater: updater)
                 .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(white: 0.13)))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.45), radius: 24, y: 10)

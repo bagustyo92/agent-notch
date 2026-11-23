@@ -79,9 +79,17 @@ struct PopoverView: View {
     let store: SessionStore
     let settings: Settings
     let popoverState: PopoverState
+    let updater: Updater
 
     private func binding(_ keyPath: ReferenceWritableKeyPath<Settings, Bool>) -> Binding<Bool> {
         Binding(get: { settings[keyPath: keyPath] }, set: { settings[keyPath: keyPath] = $0 })
+    }
+
+    private var appVersionLabel: String {
+        if let v = updater.runningVersion {
+            return "AgentNotch \(v.description)"
+        }
+        return "AgentNotch (unbundled)"
     }
 
     var body: some View {
@@ -110,22 +118,109 @@ struct PopoverView: View {
             if let error = settings.loginItemError {
                 Text(error).font(.system(size: 10)).foregroundStyle(.red)
             }
-            HStack {
-                Text(store.versionNote ?? "Tested with Claude \(SessionStore.defaultTestedVersion) · Antigravity \(SessionStore.defaultTestedAntigravityVersion)")
+            VStack(alignment: .leading, spacing: 6) {
+                let testedVersions = store.versionNote ?? "Tested with Claude \(SessionStore.defaultTestedVersion) · Antigravity \(SessionStore.defaultTestedAntigravityVersion)"
+                Text("\(appVersionLabel) · \(testedVersions)")
                     .font(.system(size: 10))
                     .foregroundStyle(store.versionNote == nil ? Color.secondary : Color.orange)
-                Spacer()
-                Button { NSApp.terminate(nil) } label: {
-                    Label("Quit", systemImage: "xmark.circle").font(.system(size: 11))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 8) {
+                    if updater.runningVersion != nil {
+                        updateControl
+                    }
+                    Spacer()
+                    Button { NSApp.terminate(nil) } label: {
+                        Label("Quit", systemImage: "xmark.circle").font(.system(size: 11))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .disabled(updater.isInstalling)
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
             }
         }
         .toggleStyle(.switch)
         .controlSize(.small)
         .padding(14)
         .frame(width: 440)
+    }
+
+    @ViewBuilder
+    private var updateControl: some View {
+        switch updater.state {
+        case .idle:
+            Button("Check for Updates") { updater.checkForUpdates() }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        case .checking:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("Checking…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        case .upToDate:
+            Text("✓ Up to date")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.finished)
+        case .available(let offer):
+            HStack(spacing: 8) {
+                Button("Update to \(offer.version.description)") { updater.install(offer) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.mini)
+                    .font(.system(size: 11, weight: .medium))
+                Button("What's new ↗") { NSWorkspace.shared.open(offer.releaseNotesURL) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        case .downloading(let progress):
+            let pct = Int((progress * 100).rounded())
+            Text("Downloading… \(pct)%")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+        case .installing:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("Installing…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        case .failed(let reason, _):
+            HStack(spacing: 4) {
+                Text("Couldn't update")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                Text("·")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Button("Retry") { updater.retry() }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+            }
+            .help(reason)
+        case .manual(let version, let notesURL, let reason):
+            Button("Update to \(version.description) ↗") { NSWorkspace.shared.open(notesURL) }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .help(reason)
+        case .updated(let version, let notesURL):
+            HStack(spacing: 4) {
+                Text("Updated to \(version.description)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.finished)
+                Text("·")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Button("What's new ↗") { NSWorkspace.shared.open(notesURL) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func settingRow(_ symbol: String, _ title: String, isOn: Binding<Bool>) -> some View {
@@ -155,16 +250,18 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private let popoverState = PopoverState()
     private let store: SessionStore
     private let state: StatusItemState
+    private let updater: Updater
     private var ticker: Task<Void, Never>?
     /// The view in the bar; `--demo menubar` renders it for captures.
     let view: StatusItemView
 
-    init(store: SessionStore, settings: Settings) {
+    init(store: SessionStore, settings: Settings, updater: Updater) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let state = StatusItemState()
         self.item = item
         self.store = store
         self.state = state
+        self.updater = updater
         view = StatusItemView(store: store, state: state) { width in
             if item.length != width { item.length = width }
         }
@@ -190,7 +287,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             button.action = #selector(togglePopover)
             button.toolTip = "AgentNotch"
         }
-        let controller = NSHostingController(rootView: PopoverView(store: store, settings: settings, popoverState: popoverState))
+        let controller = NSHostingController(rootView: PopoverView(store: store, settings: settings, popoverState: popoverState, updater: updater))
         controller.sizingOptions = [.preferredContentSize]
         popover.contentViewController = controller
         popover.behavior = .transient
@@ -201,6 +298,14 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// The item's button, for `--demo menubar` captures.
     var button: NSStatusBarButton? { item.button }
 
+    /// Open the popover directly (used after relaunching from an in-place update, D46).
+    func showPopover() {
+        guard let button = item.button, !popover.isShown else { return }
+        popoverState.isShown = true
+        NSApp.activate()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
     /// Write only on change: every @Observable write re-renders, and this runs twice a second.
     private func refreshFlash() {
         let flash = store.anyJustFinished(now: Date())
@@ -208,13 +313,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func togglePopover() {
-        guard let button = item.button else { return }
+        guard item.button != nil else { return }
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            popoverState.isShown = true
-            NSApp.activate()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            showPopover()
         }
     }
 
@@ -222,5 +325,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popoverState.isShown = false
         popoverState.message = nil
         popoverState.list.reset()
+        updater.popoverDidClose()
     }
 }
