@@ -111,7 +111,7 @@ struct PopoverView: View {
                 Text(error).font(.system(size: 10)).foregroundStyle(.red)
             }
             HStack {
-                Text(store.versionNote ?? "Tested with Claude Code \(SessionStore.defaultTestedVersion)")
+                Text(store.versionNote ?? "Tested with Claude \(SessionStore.defaultTestedVersion) · Antigravity \(SessionStore.defaultTestedAntigravityVersion)")
                     .font(.system(size: 10))
                     .foregroundStyle(store.versionNote == nil ? Color.secondary : Color.orange)
                 Spacer()

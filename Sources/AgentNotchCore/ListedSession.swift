@@ -20,15 +20,33 @@ public struct ListedSession: Sendable, Equatable {
     public var version: String?
     /// Filled by the monitor from the transcript's mtime; drives the 24 h rule for background sessions.
     public var transcriptModifiedAt: Date?
+    /// Which coding agent owns this session; defaults to `.claude` so existing call sites stay unchanged.
+    public var provider: AgentProvider
+    /// Pre-classified host source when already known (e.g. Antigravity process/surface inspection).
+    public var sourceHint: Source?
+    /// Controlling tty when already known.
+    public var tty: String?
+    /// Known transcript path when not under `~/.claude/projects/` (e.g. Antigravity `brain/<id>/...`).
+    public var transcriptURL: URL?
+    /// Git branch when already resolved (e.g. from `<cwd>/.git/HEAD`).
+    public var branch: String?
+    /// Pre-masked AI title when carried by the list source (e.g. Antigravity `conversation_summaries.title`).
+    public var aiTitle: String?
+    /// End time for sessions already finished when first listed (drives the 10-minute linger window).
+    public var endedAt: Date?
 
     public init(
         sessionId: String, pid: Int32? = nil, cwd: String, kind: SessionKind, name: String,
         startedAt: Date, status: String? = nil, state: String? = nil, waitingFor: String? = nil,
-        version: String? = nil, transcriptModifiedAt: Date? = nil, needs: String? = nil
+        version: String? = nil, transcriptModifiedAt: Date? = nil, needs: String? = nil,
+        provider: AgentProvider = .claude, sourceHint: Source? = nil, tty: String? = nil,
+        transcriptURL: URL? = nil, branch: String? = nil, aiTitle: String? = nil, endedAt: Date? = nil
     ) {
         self.sessionId = sessionId; self.pid = pid; self.cwd = cwd; self.kind = kind; self.name = name
         self.startedAt = startedAt; self.status = status; self.state = state; self.waitingFor = waitingFor; self.needs = needs
         self.version = version; self.transcriptModifiedAt = transcriptModifiedAt
+        self.provider = provider; self.sourceHint = sourceHint; self.tty = tty
+        self.transcriptURL = transcriptURL; self.branch = branch; self.aiTitle = aiTitle; self.endedAt = endedAt
     }
 }
 
@@ -54,20 +72,30 @@ extension ListedSession {
     }
 
     /// The "Status mapping" table. Unknown values degrade to `idle` (R8).
+    /// Also recognizes Antigravity `CASCADE_RUN_STATUS_*` strings as a defensive fallback.
     var mappedStatus: Status {
         if waitingFor != nil { return .waiting }
         switch kind {
         case .interactive:
-            switch status?.lowercased() {
-            case "busy", "running", "working": return .working
+            guard let raw = status?.lowercased() else { return .idle }
+            if raw.hasPrefix("cascade_run_status_waiting") { return .waiting }
+            switch raw {
+            case "busy", "running", "working", "cascade_run_status_running": return .working
             case "waiting", "blocked": return .waiting
+            case "done", "cascade_run_status_done", "cascade_run_status_completed",
+                 "cascade_run_status_stopped", "cascade_run_status_killed": return .done
             default: return .idle
             }
         case .background:
-            switch (state ?? status)?.lowercased() {
+            guard let raw = (state ?? status)?.lowercased() else { return .idle }
+            if raw.hasPrefix("cascade_run_status_waiting") { return .waiting }
+            switch raw {
             case "blocked", "waiting": return .waiting
-            case "running", "busy", "working": return .working
-            case "done", "stopped", "exited", "failed", "killed", "completed": return .done
+            case "running", "busy", "working", "cascade_run_status_running": return .working
+            case "done", "stopped", "exited", "failed", "killed", "completed",
+                 "cascade_run_status_done", "cascade_run_status_completed",
+                 "cascade_run_status_stopped", "cascade_run_status_killed",
+                 "cascade_run_status_failed", "cascade_run_status_error": return .done
             default: return .idle
             }
         }

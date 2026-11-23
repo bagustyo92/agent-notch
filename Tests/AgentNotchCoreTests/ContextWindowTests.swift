@@ -16,12 +16,18 @@ import Testing
         ("claude-sonnet-4-20250514", 200_000),
         ("claude-haiku-4-5-20251001", 200_000),
         ("claude-sonnet-4-5-20250929[1m]", 1_000_000),
+        ("gemini-4-neon", 1_000_000),
+        ("gemini-3-pro-preview", 1_000_000),
+        ("gemini-2.5-pro", 1_000_000),
+        ("gemini-2.5-flash", 1_000_000),
+        ("gemini-2.0-flash", 1_000_000),
+        ("gemini-1.5-pro", 1_000_000),
     ])
     func knownModels(id: String, window: Int) {
         #expect(ContextWindow.window(forModel: id) == window)
     }
 
-    @Test(arguments: ["gpt-x", "claude-3-5-haiku-20241022", "claude-haiku-5-1", "claude-opus-4-10", "claude-opus-50", ""])
+    @Test(arguments: ["gpt-x", "claude-3-5-haiku-20241022", "claude-haiku-5-1", "claude-opus-4-10", "claude-opus-50", "gemini-40-x", ""])
     func unknownModels(id: String) {
         #expect(ContextWindow.window(forModel: id) == nil)
     }
