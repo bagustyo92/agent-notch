@@ -1,17 +1,17 @@
 import Darwin
 import Foundation
 
-enum ProcessRunnerError: Error, Equatable {
+public enum ProcessRunnerError: Error, Equatable {
     case launchFailed
     case nonZeroExit(Int32)
     case timedOut
 }
 
 /// Shared subprocess execution with background pipe draining and SIGTERM→SIGKILL timeout.
-enum ProcessRunner {
+public enum ProcessRunner {
     /// Spawn, drain stdout on a background thread (so a large output can never fill the pipe and
     /// stall the child), and enforce the timeout with SIGTERM, then SIGKILL one second later.
-    static func capture(
+    public static func capture(
         executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,

@@ -2,7 +2,7 @@
 
 # AgentNotch — design and implementation plan
 
-- Status: v0.6. M1–M6 implemented and released as open source (see "M0 results"); the M7 soak is still open. 0.5.0 adds the context indicator and the turn summary (D38–D40). 0.6.0 adds background children (D41) and moves all motion to Core Animation (D42). 0.6.1 makes Cursor clicks window-exact with several windows open (D43). 0.6.2 detects Orca sessions and routes clicks through Orca's CLI (D44).
+- Status: v0.6. M1–M6 implemented and released as open source (see "M0 results"); the M7 soak is still open. 0.5.0 adds the context indicator and the turn summary (D38–D40). 0.6.0 adds background children (D41) and moves all motion to Core Animation (D42). 0.6.1 makes Cursor clicks window-exact with several windows open (D43). 0.6.2 detects Orca sessions and routes clicks through Orca's CLI (D44). 0.7.0 adds the version line and one-click updates (D45).
 - Origin: a personal tool, built for one user on one Mac, now open source.
 - Baseline: Claude Code 2.1.310, macOS 27, a notched MacBook Pro.
 - Source of decisions: a design Q&A on 2026-10-24 (Q-n → D-n). Change a decision with a PR that edits this file and says why.
@@ -23,7 +23,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 |---|---|
 | R1 | **Read-only.** Never approve or deny, send messages, stop, resume, attach, or kill. Never write anything under `~/.claude`. |
 | R2 | **Never block or slow a session.** No hooks. Do not touch `~/.claude/settings.json`; users often have their own hooks there. Sessions must behave identically whether the app is running, quit or crashed. |
-| R3 | **Local-only.** Zero network calls. No analytics, crash reporting, update checks or third-party SDKs. Use the Swift stdlib and Apple frameworks only. |
+| R3 | **Local-only.** Zero network calls, except one GET to `api.github.com` and a download from this repo's GitHub Releases, both only when the user clicks *Check for Updates* / *Update*. No analytics, crash reporting, background checks or third-party SDKs. Swift stdlib and Apple frameworks only. |
 | R4 | **No persistence of transcript content.** Derived fields live in memory only. No log files. UserDefaults holds settings only (`hideDetails`, `launchAtLogin`, `autoOpen`, `showSubagentsLive`). |
 | R5 | **Never open secret files.** These are `~/.claude/sessions/*.key` and `~/.claude/daemon/control.key`. From `~/.claude/ide/*.lock`, decode only `ideName`, `pid` and `workspaceFolders`. That file also holds an `authToken`: never log, display or keep it. |
 | R6 | **No real transcripts in the repo.** Fixtures are synthetic and use `/Users/dev/...` paths. The pre-commit hook (M1) enforces this. |
@@ -39,7 +39,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D2 | **Scope:** top-level sessions only in v1. **Out:** subagents (`<sessionId>/subagents/`, transcript lines with `isSidechain:true`) become child rows in v2 (done in 0.3.0, D33). Cloud and remote sessions are out of scope. |
 | D3 | **Row content:** status, one activity line and elapsed time. Clicking a row focuses that session's window. There is no transcript viewer. |
 | D4 | Read-only (R1). No macOS notification banners. |
-| D5 | Single user, not distributed. |
+| D5 | Open source, distributed to anyone (DMG, Homebrew cask, source). |
 | D6 | Local-only with no persistence (R3, R4). |
 | D7 | Fork, modify or build: whichever meets the requirements. Resolved in D19. |
 | D8 | If an organisation's device management blocks ad-hoc-signed apps, installing needs IT approval. Only relevant if V4 fails. |
@@ -55,7 +55,7 @@ Clicking a session focuses its window. The app is strictly read-only.
 | D18 | **Repo:** a standalone Swift package. Synthetic fixtures only (R6). |
 | D19 | **Build from scratch** as a Swift package with no hooks. Forks rejected after a source audit of vibe-notch@10f1d24 and coucou@47d1c2d. Reasons: <br>• Both block sessions through PermissionRequest hooks (waits of up to 300 s and 118 s). <br>• vibe-notch ships Mixpanel (keyed by hardware UUID) plus Sparkle. <br>• coucou shows one pill per host app and carries about 40 integrations plus an iPhone relay. <br>• Neither focuses a specific window. <br>• Neither sees sessions that were already running when the app launched. <br>• Both need Xcode. |
 | D20 | **Menu bar item:** the icon plus the notch's collapsed sides, live states only: **working** (dots and count; the dots are still, D42), then **waiting** (orange dot and count) or a green check for a just-finished turn. Two live rows stack; one sits centred; idle is the icon alone. The icon tints orange when waiting > 0. |
-| D21 | **Division of work:** the notch is the live view. The menu bar dropdown shows the **same rows** plus the controls: Hide details, Pop open automatically, Show subagents in live view, Launch at login, version line, Quit. Both render from one in-memory `SessionStore`. |
+| D21 | **Division of work:** the notch is the live view. The menu bar dropdown shows the **same rows** plus the controls: Hide details, Pop open automatically, Show subagents in live view, Launch at login, the app + Claude Code version line, the update control (D45), and Quit. Both render from one in-memory `SessionStore`. |
 | D22 | **Names:** app `AgentNotch`, directory `agent-notch`, bundle id `com.bagustyo92.agentnotch`. |
 | D23 | **Session list source:** `claude agents --json`, run only when `~/.claude/sessions/` changes, debounced to 300 ms. Fall back to reading `~/.claude/sessions/*.json` directly if the command fails. **Activity source:** the transcript tail. |
 | D24 | **Format drift:** the row shows its status plus "activity unavailable". The dropdown shows `Tested with Claude Code 2.1.310 · running <x>` when any session's version differs. |
@@ -121,6 +121,14 @@ From a grilling session (Q1–Q6) on 2026-11-23. Nothing new is persisted (R4); 
 |---|---|
 | D44 | **Orca detection and tiered CLI focus.** <br>• **Detection (F30):** for a CLI `claude` binary (`/.local/share/claude/versions/`, `/.local/bin/claude`, `/bin/claude`), `ProcessProbe` walks `parentPid` up to 16 hops (using `KERN_PROC_PID` fallback to step past setuid-root `/usr/bin/login`). If any ancestor executable path contains `/Orca.app/` or `/Orca Agents.app/`, classify as `Source.orca`; IDE extension binaries still win first. Both Orca Chat (`tty == nil`) and Orca Terminal panes (`tty != nil`) share `Source.orca`, labeled `"Orca"` in rows and `orca` in `--dump`. <br>• **Click routing (F31, F32):** immediately activate `com.stablyai.orca` on `@MainActor`, then run Orca's documented CLI off `@MainActor` (5 s timeout, `ORCA_*` env stripped, `--environment local` always passed so remote VMs are never woken, R1/R3): <br>  1. Live Orca Terminal (`status != .done && tty != nil`): run `orca terminal list --environment local --json`; filter to `executionHostId == "local"`, `connected == true`, `orphaned == false` whose `worktreePath` equals or encloses `session.cwd` (deepest match wins). Only when **exactly one** terminal matches, run `orca terminal switch --environment local --terminal <handle> --json`. On 0/2+ matches or failure, fall through. <br>  2. Orca Chat (`tty == nil`), Done Orca rows (`status == .done`), or terminal fallback: if `session.cwd` is a non-empty existing directory, run `orca worktree activate --environment local --worktree current --json` with `currentDirectoryURL = session.cwd`. <br>  3. Fallback (e.g. Orca folder workspace, missing CLI, non-zero exit): Orca stays active and the row banner shows `"Couldn't select this workspace in Orca"`. <br>• **Scope & future URL scheme:** Claude Code sessions only (non-Claude agents in Orca remain out of scope). All Orca targeting lives behind `OrcaFocus` so a future `orca://` chat deep link can slot ahead of CLI routing without changing the UI. <br>• **`--dump`:** `source` prints `orca`; `link=` prints `orca:terminal` (live Orca Terminal), `orca:worktree` (Orca Chat or Done row) when `cwd` is non-empty, else `-` (never raw `cwd`, R6). |
 
+### 0.7.0 decisions (2026-11-18)
+
+From a grilling session (Q0–Q17) on 2026-11-16 to 2026-11-18. **R3 changes** to allow manual, click-only update requests against GitHub Releases; R4 does not change (nothing new is persisted).
+
+| # | Decision |
+|---|---|
+| D45 | **App version and one-click in-place updater.** <br>• **Custom updater over Sparkle:** keeps zero third-party SDKs, no background timers or launch checks, no persisted state (R4), and full control over the trust model. <br>• **Feed (no server):** GitHub Releases (`GET https://api.github.com/repos/bagustyo92/agent-notch/releases/latest`, unauthenticated, `User-Agent: AgentNotch/<version>`, `Accept: application/vnd.github+json`), fetched **only when the user clicks Check for Updates**. Drafts and pre-releases are ignored; `403` with `x-ratelimit-remaining: 0` shows `"GitHub rate limit, try again later"`. Releases upload `AgentNotch-<v>.zip` and `.zip.sig` next to the DMG. <br>• **Trust model:** (1) Ed25519 (`CryptoKit` `Curve25519.Signing`) signature in `.zip.sig` verified over the exact zip bytes against the 32-byte public key compiled into `UpdateKey.publicKey`; (2) version binding on the unzipped `Info.plist` (`CFBundleIdentifier == com.bagustyo92.agentnotch`, `CFBundleShortVersionString == tag > running`, blocking downgrade replays); (3) `codesign --verify --deep --strict` on the unzipped app (add Team ID check once releases move to Developer ID); (4) HTTPS only including every redirect, `browser_download_url` must start with `https://github.com/bagustyo92/agent-notch/releases/download/`, and archive size capped at 100 MB (F37). <br>• **Footer UI:** two lines in `PopoverView`: line 1 `AgentNotch <version> · Tested with Claude Code …` (or `AgentNotch (unbundled)` when launched without an app bundle, hiding the update control); line 2 shows the state (`Check for Updates`, `Checking…`, `✓ Up to date` resetting after 4 s, `Update to v` + `What's new ↗`, `Downloading… N%`, `Installing…`, `Couldn't update · Retry` with tooltip reason, `Update to v ↗` manual link, or `Updated to v · What's new ↗` until the popover closes) alongside `Quit`. State lives on `@MainActor @Observable final class Updater` owned by `AppDelegate`. <br>• **Install & relaunch:** downloads with ephemeral `URLSession` into an `.itemReplacementDirectory` on the app's volume, verifies signature, unzips with `ditto -x -k`, checks plist and `codesign`, defensively removes `com.apple.quarantine` if present (F33), atomically swaps the bundle with `FileManager.replaceItemAt` and removes the backup, then spawns a detached `/bin/sh` helper that waits for the old PID to exit and launches `/usr/bin/open -n <bundleURL> --args --updated-to <v>` before `NSApp.terminate(nil)`. Translocated (`/AppTranslocation/`), read-only volume (mounted DMG), or non-writable parent paths fall back to the release page (`manual`). Relaunch drops in-memory Done/timer state (accepted). Homebrew cask declares `auto_updates true`. <br>• **Debug override:** `#if DEBUG` only, `AGENTNOTCH_UPDATE_FEED` (`file://` or loopback `http://127.0.0.1`) and `AGENTNOTCH_UPDATE_PUBKEY` (base64) override the feed and public key; release builds ignore them. |
+
 ## Verified facts (2026-10-24)
 
 | # | Fact | How verified |
@@ -185,6 +193,11 @@ Extra facts found while implementing:
 | F30 | **Orca process tree** (Orca 1.4.271, Claude Code 2.1.328, 2026-11-23): **Orca Chat** runs `claude` (`~/.local/share/claude/versions/<ver>`, no TTY) under `/Applications/Orca.app/Contents/MacOS/orca-provider-exec` → `…/Orca Agents.app/Contents/MacOS/Orca Agents`. **Orca Terminal** runs `claude` (with a `ttysNNN`) under `zsh` → `/usr/bin/login` (uid 0, requiring `KERN_PROC_PID` to read `ppid`) → `…/Orca Agents.app/Contents/MacOS/Orca Agents`. Walking `parentPid` finds `/Orca.app/` or `/Orca Agents.app/` for both modes and never for `Terminal.app`. | `ps`, `sysctl` |
 | F31 | **Orca URL scheme & scripting** (Orca 1.4.271, 2026-11-23): `CFBundleURLSchemes` registers `orca`, but `open-url` (`deepLinks.accepts` + plugin install links) only routes `bot`, `bots/share`, `skills/share`, `plugins`, `pair`, and `<connector>/link`. No chat, session, terminal, or worktree deep link exists, and no `.sdef` AppleScript dictionary ships in `Orca.app`. | `Info.plist`, `app.asar` `out/main/index.js` |
 | F32 | **Orca CLI navigation** (`/Applications/Orca.app/Contents/Resources/bin/orca`, Orca 1.4.271, 2026-11-23): `orca terminal list --environment local --json` returns `{ok, result: {terminals: [{handle, worktreePath, connected, orphaned, executionHostId, …}]}}` (no `pid` or `tty`); `orca terminal switch --environment local --terminal <handle> --json` focuses that terminal pane and its workspace; `orca worktree activate --environment local --worktree current --json` (with `cwd` set to the session's directory) activates the enclosing local git worktree in Orca's sidebar and refuses `folder:<id>` workspaces. Passing `--environment local` overrides any inherited `ORCA_ENVIRONMENT` / `ORCA_PAIRING_CODE`. | `orca --help`, live CLI |
+| F33 | **URLSession download quarantine** (2026-11-23): a file downloaded via `URLSession` by a non-sandboxed Swift/macOS process carries only `com.apple.provenance` and **no `com.apple.quarantine`** xattr. `BundleCheck.removeQuarantineIfPresent` still checks and strips `com.apple.quarantine` defensively after all verification checks pass. | `URLSession.download`, `xattr -l` |
+| F34 | **SMAppService across in-place replace** (2026-11-23): `SMAppService.mainApp` stays `enabled` after `FileManager.replaceItemAt` replaces an ad-hoc-signed bundle under `~/Applications` with a newly ad-hoc-signed newer version at the same path. | Live check with isolated bundle id |
+| F35 | **`ditto` zip round-trip signature** (2026-11-23): `ditto -c -k --keepParent build/AgentNotch.app ...zip` followed by `ditto -x -k` keeps the ad-hoc code signature valid (`codesign --verify --deep --strict`: valid on disk, satisfies Designated Requirement). | `scripts/dmg.sh`, `ditto`, `codesign --verify` |
+| F36 | **GitHub Releases download redirect** (2026-11-23): `https://github.com/bagustyo92/agent-notch/releases/download/…` returns HTTP `302` to `https://release-assets.githubusercontent.com`; `URLSession` follows it with no extra code (redirect delegate verifies HTTPS on every hop). | Live `URLSession` download of `v0.5.0` |
+| F37 | **Universal update zip size** (2026-11-23): `AgentNotch-0.7.0.zip` (`x86_64` + `arm64`) is 2,540,149 bytes (~2.42 MB; DMG is 2,763,116 bytes / ~2.64 MB), well under the 100 MB cap. | `scripts/dmg.sh`, `stat` |
 
 ## Architecture
 
@@ -205,13 +218,19 @@ agent-notch/
     ActivitySummary.swift       // tool_use/text → safe one-liner, secret mask, hide-details
     SessionStore.swift          // @MainActor @Observable: merge, status, linger, attention events, counts
     FileWatcher.swift           // FSEvents wrapper (kFSEventStreamCreateFlagFileEvents)
+    AppVersion.swift            // digits-and-dots version parsing and comparison (D45)
+    ReleaseFeed.swift           // GitHub Releases JSON model, URL/size policy, update decisions (D45)
+    UpdateSignature.swift       // Ed25519 archive verification via CryptoKit (D45)
+    UpdateKey.swift             // compiled-in Ed25519 public key (D45)
+    BundleCheck.swift           // Info.plist verification, installability, ditto/codesign/replace (D45)
   Sources/AgentNotch/           // AppKit + SwiftUI
-    App.swift                   // NSApplication, accessory policy
+    App.swift                   // NSApplication, accessory policy, --updated-to handling
     NotchPanel.swift            // NSPanel geometry, hover/expand/pulse
-    StatusItem.swift            // two-line counts + NSPopover dropdown
+    StatusItem.swift            // two-line counts + NSPopover dropdown + two-line footer
     SessionRowView.swift        // ONE row view shared by notch and dropdown
     Focus.swift                 // Terminal AppleScript; IDE links (D43); Orca CLI routing (D44); app activation (D27)
     LoginItem.swift             // SMAppService or LaunchAgent fallback (V6)
+    Updater.swift               // click-only updater state machine, ephemeral URLSession, relaunch (D45)
   Tests/AgentNotchCoreTests/    // Swift Testing
   Tests/Fixtures/               // synthetic *.jsonl / *.json, each < 20 KB, paths under /Users/dev
   scripts/bundle.sh
@@ -347,8 +366,7 @@ Risk area: secrets on screen and during screen share.
   2. a divider
   3. Toggle "Hide details"
   4. Toggle "Launch at login"
-  5. the version line (D24)
-  6. "Quit AgentNotch"
+  5. the two-line footer: `AgentNotch <version>` + Claude Code version line (D24, D45), then the update control and Quit
 - Write in the README: macOS hides overflowing menu bar items behind the notch when there are many. Tell users to ⌘-drag the item next to the clock.
 
 ### Focus (D14, D25, D27, D43, D44)

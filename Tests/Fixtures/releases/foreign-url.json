@@ -1,0 +1,18 @@
+{
+  "tag_name": "v0.7.1",
+  "html_url": "https://github.com/bagustyo92/agent-notch/releases/tag/v0.7.1",
+  "draft": false,
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "AgentNotch-0.7.1.zip",
+      "browser_download_url": "https://evil.example/AgentNotch-0.7.1.zip",
+      "size": 4200000
+    },
+    {
+      "name": "AgentNotch-0.7.1.zip.sig",
+      "browser_download_url": "https://github.com/bagustyo92/agent-notch/releases/download/v0.7.1/AgentNotch-0.7.1.zip.sig",
+      "size": 89
+    }
+  ]
+}
