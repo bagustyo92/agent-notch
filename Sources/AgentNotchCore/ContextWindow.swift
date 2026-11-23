@@ -12,12 +12,14 @@ public enum ContextWindow {
     /// Claude Code compacts at `window − compactBuffer` (F21).
     public static let compactBuffer = 33_000
 
-    /// Model id prefixes from Claude Code 2.1.310 (F20). Update this table when Claude Code adds a model.
+    /// Model id prefixes from Claude Code 2.1.310 (F20) and Antigravity/Gemini.
     static let table: [(prefix: String, window: Int)] = [
         ("claude-opus-5", oneMillion), ("claude-fable-5", oneMillion), ("claude-sonnet-5", oneMillion),
         ("claude-haiku-5-5", oneMillion), ("claude-opus-4-7", oneMillion), ("claude-opus-4-8", oneMillion),
         ("claude-opus-4-0", standard), ("claude-opus-4-1", standard), ("claude-opus-4-5", standard),
         ("claude-opus-4-6", standard), ("claude-sonnet-4", standard), ("claude-haiku-4-5", standard),
+        ("gemini-4", oneMillion), ("gemini-3", oneMillion), ("gemini-2.5", oneMillion),
+        ("gemini-2.0", oneMillion), ("gemini-1.5", oneMillion),
     ]
 
     /// Longest table prefix that ends on an id boundary, so `claude-opus-4-1` never matches

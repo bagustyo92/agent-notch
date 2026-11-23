@@ -8,7 +8,8 @@ See every running Claude Code session on your Mac at a glance: in the notch and 
 If you run several Claude Code sessions at once (Terminal, the Cursor or VS Code extension,
 `claude --bg`), AgentNotch shows which ones are working, which are waiting for you, and what each
 is doing right now. Click a row to jump to it. It is strictly **read-only**: it never approves,
-sends, stops or resumes anything, installs no hooks, and makes no network calls.
+sends, stops or resumes anything, installs no hooks, and makes no network calls unless you click
+**Check for Updates**.
 
 > AgentNotch is an independent community project. It is not affiliated with or endorsed by Anthropic.
 
@@ -71,6 +72,20 @@ scripts/install.sh      # builds, copies to ~/Applications, and launches
 
 To start it at login, open the menu bar item and switch on **Launch at login**.
 
+## Updating
+
+From 0.7.0 onward, open the menu bar dropdown and click **Check for Updates**. When a newer
+release is available, one click on **Update to \<version\>** downloads it from GitHub Releases,
+verifies its Ed25519 signature and code signature, swaps the app in place, and relaunches it.
+Nothing runs in the background or on launch.
+
+- **Upgrading from 0.6.x or earlier:** install 0.7.0 once by hand (DMG, Homebrew, or
+  `scripts/install.sh`); updates after that are one click.
+- **Homebrew users:** you can update either in-app (the cask sets `auto_updates true`) or with
+  `brew upgrade --cask agent-notch`.
+- **Running from a DMG or read-only folder:** the footer offers a direct link to the release page
+  instead of replacing the bundle in place.
+
 ## What you see
 
 - **Notch.** While anything runs, the notch grows a little on both sides: animated dots and the
@@ -126,7 +141,11 @@ AgentNotch only reads, and only on your Mac:
 - process facts (executable path, terminal, parent process) for the session processes.
 
 It never opens `*.key` files or reads auth tokens and keeps everything in memory. The only things it
-saves are your four settings. The AgentNotch process makes no network connections.
+saves are your four settings. AgentNotch makes zero background or launch-time network connections.
+Only when you explicitly click **Check for Updates** or **Update**, it makes unauthenticated HTTPS
+requests to GitHub (`api.github.com` and `github.com` / `release-assets.githubusercontent.com`) with
+`User-Agent: AgentNotch/<version>`. Nothing in the request identifies you, though GitHub sees your
+IP address when you click.
 
 What it shows: the AI title, the first line of Claude's latest text, and the description of a Bash
 step (never the command itself). Long tokens and `key=value` credentials are masked, but nothing

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- **App version and one-click in-place updates.** The menu bar dropdown footer now shows `AgentNotch <version>` next to the Claude Code compatibility line, plus a manual **Check for Updates** button (hidden when running unbundled via `swift run`).
+- Checks run only on click — no background timers, launch checks, or persisted update state (R3 narrow exception, R4 unchanged).
+- Clicking **Update to X** downloads `AgentNotch-<version>.zip` and `.zip.sig` from GitHub Releases over HTTPS (including redirects), verifies the Ed25519 signature against the compiled-in public key, verifies `Info.plist` bundle ID and version binding (strictly newer, matching the tag), runs `codesign --verify --deep --strict`, atomically swaps the bundle in place with `FileManager.replaceItemAt`, and relaunches into the dropdown showing `Updated to X · What's new ↗`.
+- Installs on read-only volumes (mounted DMGs), translocated paths (`/AppTranslocation/`), or non-writable directories offer a direct release page link (`Update to X ↗`) instead.
+- Release workflow and `scripts/dmg.sh` now package and Ed25519-sign `AgentNotch-<version>.zip` alongside the DMG; `scripts/cask.sh` declares `auto_updates true`.
+
 ## 0.6.2
 
 - **Orca session detection and click routing.** Claude Code sessions running inside Orca — both native Orca Chat (`orca-provider-exec`) and Orca Terminal panes (`Orca Agents` ancestor) — are now classified as `Orca` instead of `Terminal`.

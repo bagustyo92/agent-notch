@@ -2,6 +2,9 @@ import Foundation
 
 public enum TranscriptRole: Sendable, Equatable { case assistant, user }
 
+/// Which transcript JSONL schema a tail parses.
+public enum TranscriptFormat: Sendable, Equatable { case claude, antigravity }
+
 /// A `Bash` call with `run_in_background: true` (D41, F22). The activity comes from
 /// `ActivitySummary.forToolUse`, which never reads `command`.
 public struct BackgroundStart: Sendable, Equatable {
@@ -77,8 +80,9 @@ public enum TranscriptLine: Sendable, Equatable {
 /// lead-in (F25). Never retains the line.
 public enum TranscriptLineParser {
     /// `includeSidechain` is for subagent transcripts, whose every line is a sidechain (D33).
-    public static func parse(_ line: Data, includeSidechain: Bool = false) -> TranscriptLine? {
+    public static func parse(_ line: Data, includeSidechain: Bool = false, format: TranscriptFormat = .claude) -> TranscriptLine? {
         guard let obj = try? JSONSerialization.jsonObject(with: line), let dict = obj as? [String: Any] else { return nil }
+        if format == .antigravity { return parseAntigravity(dict) }
         if !includeSidechain, (dict["isSidechain"] as? Bool) == true { return .ignored }   // D2: the main row ignores them
         guard let type = dict["type"] as? String else { return .ignored }
         switch type {
@@ -282,6 +286,86 @@ public enum TranscriptLineParser {
               s.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.[]".contains($0)) }) else { return nil }
         return s
     }
+
+    // MARK: - Antigravity Transcript Parsing
+
+    static let antigravityEditTools: Set<String> = [
+        "edit_file", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content",
+    ]
+
+    private static let geminiEffortSuffixes = ["xhigh", "high", "medium", "low", "max"]
+
+    /// Splits a Gemini model+effort token such as `gemini-4-neon-xhigh` → `("gemini-4-neon", "xhigh")`.
+    /// Non-Gemini or suffixless models return `(model, nil)`.
+    static func splitModelEffort(_ any: Any?) -> (model: String?, effort: String?) {
+        guard let raw = token(any) else { return (nil, nil) }
+        let lower = raw.lowercased()
+        guard lower.hasPrefix("gemini-") else { return (raw, nil) }
+        for effort in geminiEffortSuffixes {
+            let suffix = "-\(effort)"
+            if lower.hasSuffix(suffix), raw.count > suffix.count {
+                let model = String(raw.dropLast(suffix.count))
+                return (model, effort)
+            }
+        }
+        return (raw, nil)
+    }
+
+    /// Parses one Antigravity `transcript.jsonl` line (`USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC`, `SYSTEM_MESSAGE`).
+    static func parseAntigravity(_ dict: [String: Any]) -> TranscriptLine {
+        guard let type = dict["type"] as? String else { return .ignored }
+        switch type {
+        case "USER_INPUT":
+            return .message(role: .user, branch: nil, activity: nil, details: MessageDetails(phase: .thinking))
+        case "PLANNER_RESPONSE":
+            let (model, effort) = splitModelEffort(dict["model"])
+            let inputTokens = ContextWindow.clamp((dict["input_tokens"] as? Int) ?? 0)
+            let cacheRead = ContextWindow.clamp((dict["cache_read_tokens"] as? Int) ?? 0)
+            let cacheCreate = ContextWindow.clamp((dict["cache_creation_input_tokens"] as? Int) ?? 0)
+            let totalTokens = inputTokens + cacheRead + cacheCreate
+            var details = MessageDetails(
+                model: model,
+                effort: effort,
+                contextTokens: totalTokens > 0 ? totalTokens : nil
+            )
+
+            let toolCalls = (dict["tool_calls"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+            details.editedPathHashes = antigravityEditedPathHashes(in: toolCalls)
+
+            var activity: Activity?
+            if let lastTool = toolCalls.reversed().first(where: { ($0["name"] as? String)?.isEmpty == false }),
+               let name = lastTool["name"] as? String
+            {
+                let args = lastTool["args"] as? [String: Any] ?? [:]
+                activity = ActivitySummary.forAntigravityToolCall(name: name, args: args)
+                details.phase = .tool
+            } else if let text = dict["content"] as? String, let summary = ActivitySummary.forText(text) {
+                activity = summary
+                details.phase = .writing
+            } else {
+                details.phase = .thinking
+            }
+            return .message(role: .assistant, branch: nil, activity: activity, details: details)
+        case "GENERIC":
+            let status = (dict["status"] as? String)?.uppercased()
+            let phase: Phase = status == "RUNNING" ? .tool : .thinking
+            return .message(role: .user, branch: nil, activity: nil, details: MessageDetails(phase: phase))
+        case "SYSTEM_MESSAGE":
+            return .ignored
+        default:
+            return .ignored
+        }
+    }
+
+    static func antigravityEditedPathHashes(in toolCalls: [[String: Any]]) -> [Int] {
+        toolCalls.compactMap { call in
+            guard let name = call["name"] as? String, antigravityEditTools.contains(name),
+                  let args = call["args"] as? [String: Any] else { return nil }
+            let path = ActivitySummary.antigravityString(args["Path"] ?? args["TargetFile"] ?? args["file_path"])
+            guard let path, !path.isEmpty else { return nil }
+            return path.hashValue
+        }
+    }
 }
 
 /// Fields derived from a read. `nil` means "no new value in this read", so the store leaves the
@@ -337,12 +421,17 @@ public final class TranscriptTail {
     private let chunkSize: Int
     private let maxBackscan: Int
     private let includeSidechain: Bool
+    private let format: TranscriptFormat
 
-    public init(path: URL, chunkSize: Int = 256 * 1024, maxBackscan: Int = 4 * 1024 * 1024, includeSidechain: Bool = false) {
+    public init(
+        path: URL, chunkSize: Int = 256 * 1024, maxBackscan: Int = 4 * 1024 * 1024,
+        includeSidechain: Bool = false, format: TranscriptFormat = .claude
+    ) {
         self.path = path
         self.chunkSize = max(16, chunkSize)
         self.maxBackscan = max(self.chunkSize, maxBackscan)
         self.includeSidechain = includeSidechain
+        self.format = format
     }
 
     public var unavailable: Bool { decodeFailures >= Self.unavailableThreshold && decodeSuccesses == 0 }
@@ -358,15 +447,21 @@ public final class TranscriptTail {
         decodeSuccesses = 0
 
         var found = TranscriptUpdate()
-        var haveTitle = false, haveBranch = false, haveActivity = false
+        var haveTitle = format == .antigravity
+        var haveBranch = format == .antigravity
+        var haveActivity = false
         var havePhase = false, haveModel = false, haveEffort = false, haveTokens = false
-        var complete: Bool { haveTitle && haveBranch && haveActivity && havePhase && haveModel && haveEffort && haveTokens }
+        var complete: Bool {
+            if format == .antigravity { return haveActivity && havePhase && haveModel && haveTokens }
+            return haveTitle && haveBranch && haveActivity && havePhase && haveModel && haveEffort && haveTokens
+        }
         // Newest first while scanning backwards.
         var starts: [BackgroundStart] = [], closed: [String] = [], errored = Set<String>()
         var acks: [BackgroundAck] = [], stopped: [String] = []
         var carry: [UInt8] = []
         var end = size
         while end > 0, Int(size - end) < maxBackscan {
+            if format == .antigravity, complete { break }
             let start = end > UInt64(chunkSize) ? end - UInt64(chunkSize) : 0
             try handle.seek(toOffset: start)
             var bytes = [UInt8](try handle.read(upToCount: Int(end - start)) ?? Data())
@@ -385,6 +480,7 @@ public final class TranscriptTail {
             }
             if complete, !Self.mayHoldTaskRecord(body) { end = start; continue }
             for line in body.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
+                if format == .antigravity, complete { break }
                 if complete, !Self.mayHoldTaskRecord(line) { continue }
                 switch parseCounting(Data(line)) {
                 case .aiTitle(let title):
@@ -497,7 +593,7 @@ public final class TranscriptTail {
     private func reattachAfterTruncation() throws -> TranscriptUpdate { try attach() }
 
     private func parseCounting(_ line: Data) -> TranscriptLine? {
-        let parsed = TranscriptLineParser.parse(line, includeSidechain: includeSidechain)
+        let parsed = TranscriptLineParser.parse(line, includeSidechain: includeSidechain, format: format)
         if parsed == nil { decodeFailures += 1 } else { decodeSuccesses += 1 }
         return parsed
     }

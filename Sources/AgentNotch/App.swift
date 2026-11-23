@@ -26,6 +26,12 @@ struct AgentNotchMain {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         if let i = args.firstIndex(of: "--demo") { delegate.demoScene = args.dropFirst(i + 1).first ?? "notch" }
+        if let i = args.firstIndex(of: "--updated-to"),
+           let raw = args.dropFirst(i + 1).first,
+           let version = AppVersion(raw)
+        {
+            delegate.updatedToVersion = version
+        }
         app.delegate = delegate
         // Belt and braces with LSUIElement: no Dock icon even when run via `swift run` (D16).
         app.setActivationPolicy(.accessory)
@@ -37,34 +43,46 @@ struct AgentNotchMain {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = SessionStore()
     let settings = Settings()
+    let updater = Updater()
     private var monitor: Monitor?
     private var statusItem: StatusItemController?
     private var notch: NotchPanelController?
     private var demo: DemoDriver?
     /// Set by `--demo`: replay synthetic sessions instead of watching real ones.
     var demoScene: String?
+    /// Set by `--updated-to <v>` on relaunch after an in-place update (D46).
+    var updatedToVersion: AppVersion?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let scene = demoScene {
+            let demoUpdater = Updater.demo()
             // The dropdown scene is a still of the menu bar card: no notch panel in front of it.
             // The menubar scene drives the real menu bar item, so it has neither a stage nor a notch.
             if scene == "menubar" {
-                statusItem = StatusItemController(store: store, settings: settings)
+                statusItem = StatusItemController(store: store, settings: settings, updater: demoUpdater)
             } else if scene != "dropdown" {
                 let notch = NotchPanelController(store: store, settings: settings)
                 self.notch = notch
                 store.onAttention = { [weak notch] session, kind in notch?.attention(session, kind: kind) }
             }
-            demo = DemoDriver.start(scene: scene, store: store, settings: settings, notch: notch, statusItem: statusItem)
+            demo = DemoDriver.start(scene: scene, store: store, settings: settings, updater: demoUpdater, notch: notch, statusItem: statusItem)
             return
         }
         let monitor = Monitor(store: store)
         self.monitor = monitor
-        statusItem = StatusItemController(store: store, settings: settings)
+        let statusItem = StatusItemController(store: store, settings: settings, updater: updater)
+        self.statusItem = statusItem
         let notch = NotchPanelController(store: store, settings: settings)
         self.notch = notch
         store.onAttention = { [weak notch] session, kind in notch?.attention(session, kind: kind) }
         monitor.start()
+        if let updatedToVersion {
+            updater.markUpdated(to: updatedToVersion)
+            Task { @MainActor [weak statusItem] in
+                try? await Task.sleep(for: .milliseconds(250))
+                statusItem?.showPopover()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -123,17 +141,23 @@ enum DebugDump {
         let tasks = s.backgroundTasks.map { "\(full ? $0.activity.full : $0.activity.brief):\(ElapsedFormatter.precise(Date().timeIntervalSince($0.startedAt)))" }
             .joined(separator: ",")
         // D43, D44: the link a click would send, the remembered window, and whether the host is trusted.
-        let hosts = IDEDeepLink.hosts(source: s.source)
+        let hosts = s.provider == .claude ? IDEDeepLink.hosts(source: s.source) : []
         let link: String = if s.source == .orca {
             OrcaFocus.dumpLink(cwd: s.cwd, tty: s.tty, isLive: s.status != .done)
-        } else {
+        } else if s.provider == .claude {
             IDEDeepLink.target(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt,
                                isLive: s.status != .done, remembered: s.ideWindow, hosts: hosts).url?.absoluteString ?? "-"
+        } else {
+            "-"
         }
         let window = s.ideWindow.map { String($0.windowId) } ?? "-"
-        let trust = IDEDeepLink.locate(source: s.source, pid: s.pid, startedAt: s.startedAt, hosts: hosts)
-            .map { $0.trusted ? "yes" : "no" } ?? "-"
-        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)\twindow=\(window)\ttrust=\(trust)"
+        let trust: String = if s.provider == .claude {
+            IDEDeepLink.locate(source: s.source, pid: s.pid, startedAt: s.startedAt, hosts: hosts)
+                .map { $0.trusted ? "yes" : "no" } ?? "-"
+        } else {
+            "-"
+        }
+        return "\(s.status)\t\(s.provider.rawValue)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)\twindow=\(window)\ttrust=\(trust)"
     }
 
     static func stamp() -> String {
