@@ -6,6 +6,11 @@ import Testing
     #expect(Status.allCases.sorted() == [.waiting, .working, .idle, .done])
 }
 
+@Test func sourceIncludesOrca() {
+    #expect(Source.allCases.contains(.orca))
+    #expect(Source.orca.rawValue == "orca")
+}
+
 @Suite struct RunningChildren {
     private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
 

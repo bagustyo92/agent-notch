@@ -2,15 +2,20 @@ import Darwin
 import Foundation
 
 extension Source {
-    /// F4: the executable path tells the sources apart; `entrypoint` cannot (F3).
+    /// F4, F30: the executable path tells the sources apart; `entrypoint` cannot (F3).
     /// Terminal sessions resolve to `~/.local/share/claude/versions/<ver>` (V2) because
     /// `~/.local/bin/claude` is a symlink; both spellings count, as does a Homebrew install.
-    public static func classify(executablePath path: String?) -> Source {
+    /// Orca runs that same CLI binary under `Orca.app` (Chat) or `Orca Agents.app` (Terminal).
+    public static func classify(executablePath path: String?, ancestorPaths: [String] = []) -> Source {
         guard let path, !path.isEmpty else { return .unknown }
         if path.contains("/.cursor/extensions/") { return .cursor }
         if path.contains("/.vscode/extensions/") || path.contains("/.vscode-insiders/extensions/") { return .vscode }
-        if path.contains("/.local/share/claude/versions/") || path.hasSuffix("/.local/bin/claude") { return .terminal }
-        if path.hasSuffix("/bin/claude") { return .terminal }
+        if path.contains("/.local/share/claude/versions/") || path.hasSuffix("/.local/bin/claude") || path.hasSuffix("/bin/claude") {
+            if ancestorPaths.contains(where: { $0.contains("/Orca.app/") || $0.contains("/Orca Agents.app/") }) {
+                return .orca
+            }
+            return .terminal
+        }
         return .unknown
     }
 }
@@ -44,13 +49,20 @@ public enum ProcessProbe {
         return String(cString: name)
     }
 
-    /// Parent pid from `proc_pidinfo`, nil when the process is gone.
+    /// Parent pid from `proc_pidinfo`, falling back to `KERN_PROC_PID` so ancestor walks can cross
+    /// setuid-root intermediaries like `/usr/bin/login` in Orca Terminal panes (F30).
     public static func parentPid(_ pid: Int32) -> Int32? {
         guard pid > 0 else { return nil }
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
-        return Int32(bitPattern: info.pbi_ppid)
+        if proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size {
+            return Int32(bitPattern: info.pbi_ppid)
+        }
+        var kp = kinfo_proc()
+        var ksize = MemoryLayout<kinfo_proc>.size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &kp, &ksize, nil, 0) == 0, ksize == MemoryLayout<kinfo_proc>.size else { return nil }
+        return kp.kp_eproc.e_ppid
     }
 
     /// Start time from `proc_pidinfo`; tells a session's process apart from a later one that
@@ -81,8 +93,35 @@ public enum ProcessProbe {
         return String(decoding: buffer[start..<index], as: UTF8.self)
     }
 
+    /// Walk `parentPid` up to `maxDepth` hops (stopping at PID <= 1 or a cycle) and collect each
+    /// ancestor's executable path (F30).
+    public static func ancestorExecutablePaths(_ pid: Int32, maxDepth: Int = 16) -> [String] {
+        ancestorExecutablePaths(pid, maxDepth: maxDepth, parentPid: parentPid, executablePath: executablePath)
+    }
+
+    static func ancestorExecutablePaths(
+        _ pid: Int32,
+        maxDepth: Int = 16,
+        parentPid: (Int32) -> Int32?,
+        executablePath: (Int32) -> String?
+    ) -> [String] {
+        guard pid > 1, maxDepth > 0 else { return [] }
+        var paths: [String] = []
+        var seen: Set<Int32> = [pid]
+        var current = pid
+        for _ in 0..<maxDepth {
+            guard let parent = parentPid(current), parent > 1, seen.insert(parent).inserted else { break }
+            if let exe = executablePath(parent) { paths.append(exe) }
+            current = parent
+        }
+        return paths
+    }
+
     public static func source(forPid pid: Int32) -> Source {
-        Source.classify(executablePath: executablePath(pid))
+        let path = executablePath(pid)
+        let initial = Source.classify(executablePath: path)
+        guard initial == .terminal else { return initial }
+        return Source.classify(executablePath: path, ancestorPaths: ancestorExecutablePaths(pid))
     }
 
     /// Every pid on the system (`proc_listallpids`), used to find the IDE's extension hosts (D43).

@@ -1,8 +1,8 @@
 import Foundation
 
-/// Where a session's process comes from. Decided from the executable path (F4).
+/// Where a session's process comes from. Decided from the executable path and ancestors (F4, F30).
 public enum Source: String, Sendable, Equatable, CaseIterable {
-    case terminal, vscode, cursor, background, unknown
+    case terminal, vscode, cursor, orca, background, unknown
 }
 
 /// Display status. The raw value is the sort rank (D12, "Sort order").

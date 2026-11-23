@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2
+
+- **Orca session detection and click routing.** Claude Code sessions running inside Orca — both native Orca Chat (`orca-provider-exec`) and Orca Terminal panes (`Orca Agents` ancestor) — are now classified as `Orca` instead of `Terminal`.
+- Clicking an Orca row immediately brings Orca (`com.stablyai.orca`) forward and runs Orca's documented CLI off the main actor (only on click, always with `--environment local` and stripped `ORCA_*` env vars):
+  - Live Orca Terminal sessions switch to the exact terminal pane (`orca terminal switch`) when a single local, connected, non-orphaned terminal matches the deepest enclosing worktree; ambiguous or failed switches fall through.
+  - Orca Chat sessions, Done Orca rows, and terminal fallbacks activate the enclosing local git worktree (`orca worktree activate --worktree current`).
+  - When Orca cannot select the workspace (for example, an Orca folder workspace), Orca stays active and the banner shows `"Couldn't select this workspace in Orca"`.
+- `--dump` prints `orca` in the source column and `link=orca:terminal`, `link=orca:worktree`, or `link=-` without printing raw working directories.
+
 ## 0.6.1
 
 - **Clicking a Cursor row opens the right window when several are open.** Before, a click could raise a different project's window: either the link pointed at a window that had since opened another project, or no link was built and AgentNotch only activated Cursor, which raises the last active window.

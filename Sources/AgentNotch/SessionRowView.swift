@@ -8,6 +8,7 @@ extension Source {
         case .terminal: "Terminal"
         case .vscode: "VS Code"
         case .cursor: "Cursor"
+        case .orca: "Orca"
         case .background: "Background"
         case .unknown: "Unknown"
         }
@@ -339,7 +340,7 @@ struct SessionListView: View {
     let settings: Settings
     let ui: ListUIState
     var highlightId: String? = nil
-    let onMessage: (String) -> Void
+    let onMessage: @MainActor (String) -> Void
 
     static func items(store: SessionStore, ui: ListUIState) -> [TreeItem] {
         var items = SessionTree.sectioned(store.sessions, expanded: ui.expanded, expandedSections: ui.expandedSections)
@@ -385,7 +386,7 @@ struct SessionListView: View {
                 session: session, hideDetails: settings.hideDetails, now: now,
                 highlighted: session.id == highlightId, hovered: ui.hoveredId == session.id
             ) {
-                if let message = Focus.focus(session) { onMessage(message) }
+                Focus.focus(session, onMessage: onMessage)
             }
             .onHover { inside in
                 if inside { ui.hoveredId = session.id } else if ui.hoveredId == session.id { ui.hoveredId = nil }

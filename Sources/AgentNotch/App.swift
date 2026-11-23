@@ -122,10 +122,14 @@ enum DebugDump {
         // Bash and its age; the description only under --full (D41).
         let tasks = s.backgroundTasks.map { "\(full ? $0.activity.full : $0.activity.brief):\(ElapsedFormatter.precise(Date().timeIntervalSince($0.startedAt)))" }
             .joined(separator: ",")
-        // D43: the link a click would send, the remembered window, and whether the host is trusted.
+        // D43, D44: the link a click would send, the remembered window, and whether the host is trusted.
         let hosts = IDEDeepLink.hosts(source: s.source)
-        let link = IDEDeepLink.target(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt,
-                                      isLive: s.status != .done, remembered: s.ideWindow, hosts: hosts).url?.absoluteString ?? "-"
+        let link: String = if s.source == .orca {
+            OrcaFocus.dumpLink(cwd: s.cwd, tty: s.tty, isLive: s.status != .done)
+        } else {
+            IDEDeepLink.target(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt,
+                               isLive: s.status != .done, remembered: s.ideWindow, hosts: hosts).url?.absoluteString ?? "-"
+        }
         let window = s.ideWindow.map { String($0.windowId) } ?? "-"
         let trust = IDEDeepLink.locate(source: s.source, pid: s.pid, startedAt: s.startedAt, hosts: hosts)
             .map { $0.trusted ? "yes" : "no" } ?? "-"

@@ -2,14 +2,14 @@
 
 # AgentNotch — design and implementation plan
 
-- Status: v0.6. M1–M6 implemented and released as open source (see "M0 results"); the M7 soak is still open. 0.5.0 adds the context indicator and the turn summary (D38–D40). 0.6.0 adds background children (D41) and moves all motion to Core Animation (D42). 0.6.1 makes Cursor clicks window-exact with several windows open (D43).
+- Status: v0.6. M1–M6 implemented and released as open source (see "M0 results"); the M7 soak is still open. 0.5.0 adds the context indicator and the turn summary (D38–D40). 0.6.0 adds background children (D41) and moves all motion to Core Animation (D42). 0.6.1 makes Cursor clicks window-exact with several windows open (D43). 0.6.2 detects Orca sessions and routes clicks through Orca's CLI (D44).
 - Origin: a personal tool, built for one user on one Mac, now open source.
 - Baseline: Claude Code 2.1.310, macOS 27, a notched MacBook Pro.
 - Source of decisions: a design Q&A on 2026-10-24 (Q-n → D-n). Change a decision with a PR that edits this file and says why.
 
 ## Goal
 
-AgentNotch is a macOS app that shows **every live Claude Code session on this Mac**, in the **notch** and in a **menu bar item**. A session can come from the Terminal CLI, the VS Code extension, the Cursor extension, or `claude --bg`. For each session it shows:
+AgentNotch is a macOS app that shows **every live Claude Code session on this Mac**, in the **notch** and in a **menu bar item**. A session can come from the Terminal CLI, the VS Code extension, the Cursor extension, Orca, or `claude --bg`. For each session it shows:
 
 - the status
 - one safe activity line
@@ -113,6 +113,14 @@ From a grilling session (Q1–Q9) on 2026-11-18, after a click on one project's 
 |---|---|
 | D43 | **Window-exact IDE clicks.** <br>• **One row per session id (F29):** when `claude agents --json` lists one session under several pids, the row stands for the pid whose parent is a trusted host; if several or none are, the newest process start, then the newest `startedAt`. `pid` and `startedAt` always come from the same entry; a new pid also re-probes `source` and `tty`. Applies to every source. <br>• **Trusted host (F27):** a user host (no role counts as user) is trusted unless another live user host of the same IDE main process has the same window id with a higher counter (left over from the window's earlier workspace) or shows the same workspace in a higher-numbered window (the older window may be closed; skipped when the title has no workspace). Helper-role hosts never count. It fails closed: the host must appear in the scan and its parent must be the IDE's main executable (`/Cursor.app/Contents/MacOS/Cursor`), else it is untrusted. `open?session=` is only built for a trusted host, and `IDEDeepLink.url` is internal so the app cannot build it otherwise. <br>• **Remembered window:** while a live Cursor session resolves to a trusted host, the store keeps `IDEWindow {windowId, workspace, mainPid, mainStartedAt}`, in memory only, kept after the row turns Done and dropped with it. An untrusted read leaves it as it was. It is usable while that main process runs with the same start time and the window's newest user host still shows the same workspace and is trusted. <br>• **Click order (Cursor):** (1) a live, verified session under a trusted host: `cursor://anthropic.claude-code/open?session=<id>&windowId=<n>`; (2) otherwise a usable remembered window: `cursor://anthropic.claude-code/focus?windowId=<n>`, which only raises the window (F28); Done rows never get (1); (3) otherwise activate Cursor (D27) and show "Couldn't find this session's window". <br>• **When hosts are read:** on a click and on each list refresh (which already runs only when `~/.claude/sessions/` changes), never on a timer (R7): `proc_listallpids`, then the executable path of each pid, then argv[0] of Cursor's helper processes. <br>• **VS Code:** stays on D27 (see D28's 2026-11-18 note); it gains only the one-row-per-session fix. <br>• **`--dump`:** `link=` prints what a click would send, including `focus?…`; new `window=<n>` (remembered) and `trust=yes|no` (`-` when the session's host cannot be found). |
 
+### 0.6.2 decisions (2026-11-23)
+
+From a grilling session (Q1–Q6) on 2026-11-23. Nothing new is persisted (R4); no undocumented Orca sockets, journals, or files under `~/Library/Application Support/orca` are read (R3, R5). The `orca` CLI runs only on click, never on a refresh or timer (R7).
+
+| # | Decision |
+|---|---|
+| D44 | **Orca detection and tiered CLI focus.** <br>• **Detection (F30):** for a CLI `claude` binary (`/.local/share/claude/versions/`, `/.local/bin/claude`, `/bin/claude`), `ProcessProbe` walks `parentPid` up to 16 hops (using `KERN_PROC_PID` fallback to step past setuid-root `/usr/bin/login`). If any ancestor executable path contains `/Orca.app/` or `/Orca Agents.app/`, classify as `Source.orca`; IDE extension binaries still win first. Both Orca Chat (`tty == nil`) and Orca Terminal panes (`tty != nil`) share `Source.orca`, labeled `"Orca"` in rows and `orca` in `--dump`. <br>• **Click routing (F31, F32):** immediately activate `com.stablyai.orca` on `@MainActor`, then run Orca's documented CLI off `@MainActor` (5 s timeout, `ORCA_*` env stripped, `--environment local` always passed so remote VMs are never woken, R1/R3): <br>  1. Live Orca Terminal (`status != .done && tty != nil`): run `orca terminal list --environment local --json`; filter to `executionHostId == "local"`, `connected == true`, `orphaned == false` whose `worktreePath` equals or encloses `session.cwd` (deepest match wins). Only when **exactly one** terminal matches, run `orca terminal switch --environment local --terminal <handle> --json`. On 0/2+ matches or failure, fall through. <br>  2. Orca Chat (`tty == nil`), Done Orca rows (`status == .done`), or terminal fallback: if `session.cwd` is a non-empty existing directory, run `orca worktree activate --environment local --worktree current --json` with `currentDirectoryURL = session.cwd`. <br>  3. Fallback (e.g. Orca folder workspace, missing CLI, non-zero exit): Orca stays active and the row banner shows `"Couldn't select this workspace in Orca"`. <br>• **Scope & future URL scheme:** Claude Code sessions only (non-Claude agents in Orca remain out of scope). All Orca targeting lives behind `OrcaFocus` so a future `orca://` chat deep link can slot ahead of CLI routing without changing the UI. <br>• **`--dump`:** `source` prints `orca`; `link=` prints `orca:terminal` (live Orca Terminal), `orca:worktree` (Orca Chat or Done row) when `cwd` is non-empty, else `-` (never raw `cwd`, R6). |
+
 ## Verified facts (2026-10-24)
 
 | # | Fact | How verified |
@@ -124,7 +132,7 @@ From a grilling session (Q1–Q9) on 2026-11-18, after a click on one project's 
 | F5 | **Transcript path:** `~/.claude/projects/<encoded cwd>/<sessionId>.jsonl`. Example: `/Users/dev/work/my-app` encodes to `-Users-dev-work-my-app`. Locate transcripts by globbing `~/.claude/projects/*/<sessionId>.jsonl` rather than re-implementing the encoding. Each session also has a folder `<sessionId>/subagents/`. | `ls` |
 | F6 | **Transcript line types seen:** `user`, `assistant`, `attachment`, `system`, `ai-title {aiTitle}`, `last-prompt {lastPrompt}`, `queue-operation`, `file-history-snapshot`, `api-request*`, `atis-latch`. <br>• Message lines carry `gitBranch, cwd, entrypoint, isSidechain, timestamp, version`. <br>• `ai-title` repeats; the latest one wins. <br>• Officially internal and changes between versions. | `jq '.type' \| uniq -c` on a live transcript |
 | F7 | **IDE lock:** `~/.claude/ide/<port>.lock`, one per IDE window, has keys `authToken` (**secret**), `ideName` (`"Cursor"`), `pid` (the IDE main process, shared by all windows), `runningInWindows`, `transport` and `workspaceFolders`. A multi-root workspace lists many folders. | `jq keys` only |
-| F8 | **Bundle ids:** Cursor `com.todesktop.230313mzl4w4u92`, VS Code `com.microsoft.VSCode`, Terminal `com.apple.Terminal`. | `plutil` |
+| F8 | **Bundle ids:** Cursor `com.todesktop.230313mzl4w4u92`, VS Code `com.microsoft.VSCode`, Terminal `com.apple.Terminal`, Orca `com.stablyai.orca`. | `plutil`, `defaults read` |
 | F9 | **Hooks do run in IDE sessions:** a transcript shows `stop_hook_summary` under `claude-vscode`. Irrelevant to v1, which has no hooks. | Transcript |
 | F11 | **Toolchain:** Command Line Tools only, no Xcode. Swift 6.2.1. CLT ships `Testing.framework` (swift-testing) but **no XCTest**. No Rust. | `xcode-select -p`, `ls` |
 | F12 | **Hardware assumed:** a built-in display with a notch. Without one, the panel draws a pill (D14). Terminal app supported: Terminal.app. Editors: Cursor and VS Code. | `system_profiler` |
@@ -174,6 +182,9 @@ Extra facts found while implementing:
 | F27 | **Cursor extension hosts** (Cursor with extension 2.1.325, 2026-11-18): each window has one `extension-host (user) <workspace> [<windowId>-<counter>]`; newer builds also start `(retrieval)`, `(always-local)` and `(agent-exec)` hosts for the same window, which can be newer than its user host. `<counter>` grows across the whole Cursor main process, and every host's parent is that main process. A window that opens another workspace gets a new user host; the old one can stay alive, with its old title, while its `claude` child lives, so the same window id appears under two workspaces. | `ps -o pid,ppid,lstart,args` |
 | F28 | **Cursor URI routing** (Cursor's `out/main.js` and `workbench.desktop.main.js`, extension 2.1.325, read 2026-11-18): main reads `windowId` with `/^[1-9]\d*$/` and matches the window connection exactly. The renderer focuses its window (`focusWindow({force:true})`) once a URI handler returns true; Claude Code's handler returns true for any path under `anthropic.claude-code`, and the extension's `handleUri` only acts on `/install-plugin` and `/open`, so `/focus?windowId=<n>` raises window n and does nothing else. `/open` without `session` opens a new panel. If window n does not exist, the URI goes to the most recently focused normal window, or a new empty window when there is none. | code reading; live check in 0.6.1 |
 | F29 | **One session, two processes** (2.1.325, 2026-11-18): `claude agents --json` listed one `sessionId` under two live `claude` pids in two Cursor windows: the session was resumed in a second window while the first process lingered. | `claude agents --json`, `ps` |
+| F30 | **Orca process tree** (Orca 1.4.271, Claude Code 2.1.328, 2026-11-23): **Orca Chat** runs `claude` (`~/.local/share/claude/versions/<ver>`, no TTY) under `/Applications/Orca.app/Contents/MacOS/orca-provider-exec` → `…/Orca Agents.app/Contents/MacOS/Orca Agents`. **Orca Terminal** runs `claude` (with a `ttysNNN`) under `zsh` → `/usr/bin/login` (uid 0, requiring `KERN_PROC_PID` to read `ppid`) → `…/Orca Agents.app/Contents/MacOS/Orca Agents`. Walking `parentPid` finds `/Orca.app/` or `/Orca Agents.app/` for both modes and never for `Terminal.app`. | `ps`, `sysctl` |
+| F31 | **Orca URL scheme & scripting** (Orca 1.4.271, 2026-11-23): `CFBundleURLSchemes` registers `orca`, but `open-url` (`deepLinks.accepts` + plugin install links) only routes `bot`, `bots/share`, `skills/share`, `plugins`, `pair`, and `<connector>/link`. No chat, session, terminal, or worktree deep link exists, and no `.sdef` AppleScript dictionary ships in `Orca.app`. | `Info.plist`, `app.asar` `out/main/index.js` |
+| F32 | **Orca CLI navigation** (`/Applications/Orca.app/Contents/Resources/bin/orca`, Orca 1.4.271, 2026-11-23): `orca terminal list --environment local --json` returns `{ok, result: {terminals: [{handle, worktreePath, connected, orphaned, executionHostId, …}]}}` (no `pid` or `tty`); `orca terminal switch --environment local --terminal <handle> --json` focuses that terminal pane and its workspace; `orca worktree activate --environment local --worktree current --json` (with `cwd` set to the session's directory) activates the enclosing local git worktree in Orca's sidebar and refuses `folder:<id>` workspaces. Passing `--environment local` overrides any inherited `ORCA_ENVIRONMENT` / `ORCA_PAIRING_CODE`. | `orca --help`, live CLI |
 
 ## Architecture
 
@@ -182,10 +193,12 @@ agent-notch/
   Package.swift                 // swift-tools-version 6.0; platforms [.macOS(.v15)]; targets: AgentNotchCore (lib), AgentNotch (exe), AgentNotchCoreTests
   Sources/AgentNotchCore/       // pure logic, no AppKit, fully unit-tested
     Models.swift                // Session, Source, Status
-    AgentsCommand.swift         // runs `claude agents --json` (Process, 5 s timeout), decodes
+    ProcessRunner.swift         // shared subprocess capture with pipe draining and timeout
+    AgentsCommand.swift         // runs `claude agents --json` (5 s timeout), decodes
     RegistryReader.swift        // fallback: decode ~/.claude/sessions/*.json (skip *.key)
-    ProcessProbe.swift          // pid alive (kill(pid,0)), exe path (proc_pidpath) → Source, tty, all pids
+    ProcessProbe.swift          // pid alive (kill(pid,0)), exe path + ancestors → Source, tty, all pids
     IDEDeepLink.swift           // extension hosts, trust, chat / window-only links (D28, D43)
+    OrcaFocus.swift             // Orca CLI discovery, terminal matching, tiered click routing (D44, F32)
     SessionDedupe.swift         // one row per session id (D43, F29)
     TranscriptTail.swift        // offset tail + tolerant line parser
     ContextWindow.swift         // model → context window, %, amber/red level (D38, F20)
@@ -197,7 +210,7 @@ agent-notch/
     NotchPanel.swift            // NSPanel geometry, hover/expand/pulse
     StatusItem.swift            // two-line counts + NSPopover dropdown
     SessionRowView.swift        // ONE row view shared by notch and dropdown
-    Focus.swift                 // Terminal AppleScript; IDE links (D43), app activation (D27)
+    Focus.swift                 // Terminal AppleScript; IDE links (D43); Orca CLI routing (D44); app activation (D27)
     LoginItem.swift             // SMAppService or LaunchAgent fallback (V6)
   Tests/AgentNotchCoreTests/    // Swift Testing
   Tests/Fixtures/               // synthetic *.jsonl / *.json, each < 20 KB, paths under /Users/dev
@@ -219,7 +232,7 @@ agent-notch/
 ### Models
 
 ```swift
-enum Source { case terminal, vscode, cursor, background, unknown }
+enum Source { case terminal, vscode, cursor, orca, background, unknown }
 enum Status { case waiting, working, idle, done }          // display + sort order
 struct Session: Identifiable {
   let id: String            // sessionId
@@ -338,7 +351,7 @@ Risk area: secrets on screen and during screen share.
   6. "Quit AgentNotch"
 - Write in the README: macOS hides overflowing menu bar items behind the notch when there are many. Tell users to ⌘-drag the item next to the clock.
 
-### Focus (D14, D25, D27, D43)
+### Focus (D14, D25, D27, D43, D44)
 
 **Terminal** (tty from V2, e.g. `ttys003` → `/dev/ttys003`). Run through `NSAppleScript`:
 
@@ -361,6 +374,8 @@ end tell
 - If the owner denies permission or the script fails, call `NSRunningApplication` `activate` for `com.apple.Terminal`.
 
 **Cursor (D43):** `IDEDeepLink.target` picks the exact-chat link, else the window-only link, else nothing; `Focus` opens the URL with `NSWorkspace.open`. With nothing to send it activates Cursor as below and shows "Couldn't find this session's window".
+
+**Orca (D44):** immediately activates `com.stablyai.orca`, then off `@MainActor` calls `OrcaFocus.focus` (`orca terminal switch` when a live Orca Terminal maps to a unique local terminal, else `orca worktree activate --environment local --worktree current` with `cwd = session.cwd`). If neither succeeds (e.g. an Orca folder workspace), displays "Couldn't select this workspace in Orca".
 
 **Fallback and VS Code (D27):** run `NSRunningApplication.runningApplications(withBundleIdentifier:).first?.activate()` with the bundle id from F8. Never run `open -a <IDE> <cwd>`.
 
