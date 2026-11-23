@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// D45: Bundle inspection, installability checks, safe extraction, code-signature verification,
+/// D46: Bundle inspection, installability checks, safe extraction, code-signature verification,
 /// quarantine removal, and atomic replacement. Pure Foundation/Darwin, no AppKit.
 public enum BundleCheck {
     public static let expectedBundleIdentifier = "com.bagustyo92.agentnotch"

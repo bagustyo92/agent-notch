@@ -1,8 +1,13 @@
 import Foundation
 
+/// Which coding agent owns a session.
+public enum AgentProvider: String, Sendable, Equatable, CaseIterable {
+    case claude, antigravity
+}
+
 /// Where a session's process comes from. Decided from the executable path and ancestors (F4, F30).
 public enum Source: String, Sendable, Equatable, CaseIterable {
-    case terminal, vscode, cursor, orca, background, unknown
+    case terminal, vscode, cursor, orca, antigravityApp, antigravityIDE, background, unknown
 }
 
 /// Display status. The raw value is the sort rank (D12, "Sort order").
@@ -41,10 +46,11 @@ public struct Activity: Sendable, Equatable {
     public init(full: String, brief: String) { self.full = full; self.brief = brief }
 }
 
-/// One live (or recently ended) Claude Code session. Every string in here is
+/// One live (or recently ended) coding agent session. Every string in here is
 /// already derived and masked; the struct never carries raw transcript text (R4).
 public struct Session: Identifiable, Sendable, Equatable {
-    public let id: String            // sessionId
+    public let id: String            // sessionId or conversationId
+    public var provider: AgentProvider = .claude
     public var pid: Int32?
     public var cwd: String
     public var repo: String { (cwd as NSString).lastPathComponent }
@@ -98,14 +104,14 @@ public struct Session: Identifiable, Sendable, Equatable {
     public var backgroundChildCount: Int { status == .idle ? runningChildCount : 0 }
 
     public init(
-        id: String, pid: Int32? = nil, cwd: String, branch: String? = nil, name: String, aiTitle: String? = nil,
-        kind: SessionKind = .interactive, source: Source = .unknown, status: Status, statusChangedAt: Date,
-        activity: Activity? = nil, activityUnavailable: Bool = false, startedAt: Date, endedAt: Date? = nil,
-        claudeVersion: String? = nil, tty: String? = nil
+        id: String, provider: AgentProvider = .claude, pid: Int32? = nil, cwd: String, branch: String? = nil, name: String,
+        aiTitle: String? = nil, kind: SessionKind = .interactive, source: Source = .unknown, status: Status,
+        statusChangedAt: Date, activity: Activity? = nil, activityUnavailable: Bool = false, startedAt: Date,
+        endedAt: Date? = nil, claudeVersion: String? = nil, tty: String? = nil
     ) {
-        self.id = id; self.pid = pid; self.cwd = cwd; self.branch = branch; self.name = name; self.aiTitle = aiTitle
-        self.kind = kind; self.source = source; self.status = status; self.statusChangedAt = statusChangedAt
-        self.activity = activity; self.activityUnavailable = activityUnavailable
+        self.id = id; self.provider = provider; self.pid = pid; self.cwd = cwd; self.branch = branch; self.name = name
+        self.aiTitle = aiTitle; self.kind = kind; self.source = source; self.status = status
+        self.statusChangedAt = statusChangedAt; self.activity = activity; self.activityUnavailable = activityUnavailable
         self.startedAt = startedAt; self.endedAt = endedAt; self.claudeVersion = claudeVersion; self.tty = tty
     }
 }
@@ -121,6 +127,8 @@ public struct Subagent: Identifiable, Sendable, Equatable {
     /// The parent's `Agent` tool_use id; a grandchild's id appears in its parent subagent's
     /// `spawnedToolUseIds`.
     public var toolUseId: String?
+    /// Explicit parent subagent id (Antigravity `parent_conversation_id`); nests grandchildren directly.
+    public var parentId: String?
     public var spawnDepth: Int
     public var spawnedToolUseIds: Set<String> = []
     public var phase: Phase?
@@ -134,14 +142,14 @@ public struct Subagent: Identifiable, Sendable, Equatable {
     public var lastWriteAt: Date
 
     public init(
-        id: String, agentType: String, description: String, toolUseId: String? = nil, spawnDepth: Int = 1,
-        phase: Phase? = nil, activity: Activity? = nil, model: String? = nil, effort: String? = nil,
+        id: String, agentType: String, description: String, toolUseId: String? = nil, parentId: String? = nil,
+        spawnDepth: Int = 1, phase: Phase? = nil, activity: Activity? = nil, model: String? = nil, effort: String? = nil,
         finished: Bool = false, startedAt: Date, finishedAt: Date? = nil, lastWriteAt: Date
     ) {
         self.id = id; self.agentType = agentType; self.description = description; self.toolUseId = toolUseId
-        self.spawnDepth = spawnDepth; self.phase = phase; self.activity = activity; self.model = model
-        self.effort = effort; self.finished = finished; self.startedAt = startedAt; self.finishedAt = finishedAt
-        self.lastWriteAt = lastWriteAt
+        self.parentId = parentId; self.spawnDepth = spawnDepth; self.phase = phase; self.activity = activity
+        self.model = model; self.effort = effort; self.finished = finished; self.startedAt = startedAt
+        self.finishedAt = finishedAt; self.lastWriteAt = lastWriteAt
     }
 }
 
@@ -170,6 +178,7 @@ public struct SubagentUpdate: Sendable, Equatable {
     public var agentType: String
     public var description: String
     public var toolUseId: String?
+    public var parentId: String?
     public var spawnDepth: Int
     public var finished: Bool
     /// Transcript creation and modification times.
@@ -180,11 +189,11 @@ public struct SubagentUpdate: Sendable, Equatable {
 
     public init(
         agentId: String, agentType: String = "Agent", description: String = "", toolUseId: String? = nil,
-        spawnDepth: Int = 1, finished: Bool = false, startedAt: Date? = nil, lastWriteAt: Date? = nil,
-        transcript: TranscriptUpdate? = nil
+        parentId: String? = nil, spawnDepth: Int = 1, finished: Bool = false, startedAt: Date? = nil,
+        lastWriteAt: Date? = nil, transcript: TranscriptUpdate? = nil
     ) {
         self.agentId = agentId; self.agentType = agentType; self.description = description; self.toolUseId = toolUseId
-        self.spawnDepth = spawnDepth; self.finished = finished; self.startedAt = startedAt; self.lastWriteAt = lastWriteAt
-        self.transcript = transcript
+        self.parentId = parentId; self.spawnDepth = spawnDepth; self.finished = finished; self.startedAt = startedAt
+        self.lastWriteAt = lastWriteAt; self.transcript = transcript
     }
 }

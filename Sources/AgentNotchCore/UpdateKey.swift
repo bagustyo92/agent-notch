@@ -1,6 +1,6 @@
 import Foundation
 
-/// D45: Ed25519 public key compiled into the binary for update archive verification.
+/// D46: Ed25519 public key compiled into the binary for update archive verification.
 /// Generated with `scripts/update-keygen.swift`; the private key lives only in the
 /// `UPDATE_SIGNING_KEY` GitHub Actions secret and the maintainer's password manager.
 public enum UpdateKey {

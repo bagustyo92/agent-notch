@@ -4,14 +4,7 @@ import SwiftUI
 extension Source {
     /// Plain text: an icon here read as a loading spinner.
     var label: String {
-        switch self {
-        case .terminal: "Terminal"
-        case .vscode: "VS Code"
-        case .cursor: "Cursor"
-        case .orca: "Orca"
-        case .background: "Background"
-        case .unknown: "Unknown"
-        }
+        ProviderSourceLabel.hostName(for: self) ?? "Unknown"
     }
 }
 
@@ -124,8 +117,9 @@ struct SessionRowView: View {
 
     private var metaLine: String {
         let elapsed = ElapsedFormatter.string(for: session, now: now)
-        if hideDetails { return "\(session.source.label) · \(elapsed)" }
-        return "\(session.repo) · \(session.branch ?? "–") · \(session.source.label) · \(elapsed)"
+        let origin = ProviderSourceLabel.text(provider: session.provider, source: session.source)
+        if hideDetails { return "\(origin) · \(elapsed)" }
+        return "\(session.repo) · \(session.branch ?? "–") · \(origin) · \(elapsed)"
     }
 }
 
@@ -363,7 +357,7 @@ struct SessionListView: View {
             if items.isEmpty {
                 VStack(spacing: 4) {
                     Image(systemName: "moon.zzz").font(.system(size: 16)).foregroundStyle(.secondary)
-                    Text("No Claude Code sessions").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("No active sessions").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 44)
             } else {

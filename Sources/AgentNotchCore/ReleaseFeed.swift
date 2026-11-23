@@ -1,6 +1,6 @@
 import Foundation
 
-/// D45: GitHub Releases update feed model, validation, and decision logic.
+/// D46: GitHub Releases update feed model, validation, and decision logic.
 public enum ReleaseFeed {
     public static let defaultFeedURL = URL(string: "https://api.github.com/repos/bagustyo92/agent-notch/releases/latest")!
     public static let defaultDownloadPrefix = "https://github.com/bagustyo92/agent-notch/releases/download/"

@@ -2,7 +2,7 @@ import AgentNotchCore
 import AppKit
 import Foundation
 
-/// D45: Observable state of the one-click updater, rendered on line 2 of the popover footer.
+/// D46: Observable state of the one-click updater, rendered on line 2 of the popover footer.
 enum UpdateState: Equatable {
     case idle
     case checking
@@ -15,7 +15,7 @@ enum UpdateState: Equatable {
     case updated(version: AppVersion, notesURL: URL)
 }
 
-/// D45: App-owned one-click updater (`@MainActor @Observable`, owned by `AppDelegate` so closing
+/// D46: App-owned one-click updater (`@MainActor @Observable`, owned by `AppDelegate` so closing
 /// the popover mid-download preserves state). Makes zero network calls unless the user clicks
 /// *Check for Updates* or *Update* (R3), and persists nothing (R4).
 @MainActor
@@ -665,7 +665,7 @@ private final class FileDownloadDelegate: NSObject, URLSessionDownloadDelegate, 
     }
 }
 
-/// D45: Detached shell helper that waits for this PID to exit, then relaunches the replaced bundle
+/// D46: Detached shell helper that waits for this PID to exit, then relaunches the replaced bundle
 /// with `--updated-to <version>`, and terminates the running app.
 @MainActor
 private enum UpdateRelaunch {

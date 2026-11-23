@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the app for this version and package it as build/AgentNotch-<version>.dmg (drag-to-Applications)
-# and build/AgentNotch-<version>.zip (for in-place updates, D45).
+# and build/AgentNotch-<version>.zip (for in-place updates, D46).
 set -eu
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-$(cat VERSION)}"

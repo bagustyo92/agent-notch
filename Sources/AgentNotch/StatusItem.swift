@@ -119,8 +119,8 @@ struct PopoverView: View {
                 Text(error).font(.system(size: 10)).foregroundStyle(.red)
             }
             VStack(alignment: .leading, spacing: 6) {
-                let claudeVersion = store.versionNote ?? "Tested with Claude Code \(SessionStore.defaultTestedVersion)"
-                Text("\(appVersionLabel) · \(claudeVersion)")
+                let testedVersions = store.versionNote ?? "Tested with Claude \(SessionStore.defaultTestedVersion) · Antigravity \(SessionStore.defaultTestedAntigravityVersion)"
+                Text("\(appVersionLabel) · \(testedVersions)")
                     .font(.system(size: 10))
                     .foregroundStyle(store.versionNote == nil ? Color.secondary : Color.orange)
                     .lineLimit(1)
@@ -298,7 +298,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// The item's button, for `--demo menubar` captures.
     var button: NSStatusBarButton? { item.button }
 
-    /// Open the popover directly (used after relaunching from an in-place update, D45).
+    /// Open the popover directly (used after relaunching from an in-place update, D46).
     func showPopover() {
         guard let button = item.button, !popover.isShown else { return }
         popoverState.isShown = true

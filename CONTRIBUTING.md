@@ -90,7 +90,7 @@ SwiftUI timeline, and nothing in the menu bar item moves: macOS re-snapshots it 
 
 ### Release signing key
 
-In-place updates verify an Ed25519 signature over `AgentNotch-<version>.zip` against the public key compiled into `Sources/AgentNotchCore/UpdateKey.swift` (D45).
+In-place updates verify an Ed25519 signature over `AgentNotch-<version>.zip` against the public key compiled into `Sources/AgentNotchCore/UpdateKey.swift` (D46).
 
 - **Generate once:** `swift scripts/update-keygen.swift <out-file>` writes the base64 raw private key to `<out-file>` with mode `0600` and prints only the public key.
 - **Store the secret:** `gh secret set UPDATE_SIGNING_KEY < <out-file>`, back `<out-file>` up in a password manager, and delete the local copy. Never commit, print, or log the private key.

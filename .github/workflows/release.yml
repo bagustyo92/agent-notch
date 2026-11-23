@@ -10,7 +10,7 @@ jobs:
   release:
     runs-on: macos-15
     env:
-      # Required: Ed25519 signing key for in-place update archives (D45).
+      # Required: Ed25519 signing key for in-place update archives (D46).
       UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
       # Optional. Without them the release is an ad-hoc signed, un-notarized DMG (see CONTRIBUTING.md).
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// D45: Ed25519 signature verification over the exact bytes of an update archive.
+/// D46: Ed25519 signature verification over the exact bytes of an update archive.
 public enum UpdateSignature {
     public static let publicKeyByteCount = 32
     public static let signatureByteCount = 64

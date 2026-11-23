@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// Sign or verify an AgentNotch update archive with Ed25519 (D45).
+// Sign or verify an AgentNotch update archive with Ed25519 (D46).
 // Sign:   UPDATE_SIGNING_KEY=<base64> swift scripts/sign-update.swift <zip>
 // Verify: swift scripts/sign-update.swift --verify <zip> <pubkey-base64>
 import CryptoKit

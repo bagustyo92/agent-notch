@@ -1,6 +1,6 @@
 import Foundation
 
-/// D45: dot-separated numeric app version (same digits-and-dots rule as `scripts/bundle.sh`).
+/// D46: dot-separated numeric app version (same digits-and-dots rule as `scripts/bundle.sh`).
 /// Strips a single leading `v`, compares component-wise with missing trailing components as 0
 /// (`0.7 == 0.7.0`), and rejects pre-release tags or malformed inputs.
 public struct AppVersion: Equatable, Comparable, Hashable, CustomStringConvertible, Sendable {

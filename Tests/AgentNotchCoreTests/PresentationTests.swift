@@ -12,6 +12,11 @@ private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
         ("claude-3-5-haiku-20241022", "Haiku 3.5"),
         ("claude-fable-5-1", "Fable 5.1"),
         ("claude-opus", "Opus"),
+        ("gemini-4-neon", "Gemini 4 Neon"),
+        ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
+        ("gemini-2-5-flash", "Gemini 2.5 Flash"),
+        ("gemini-2.0-flash-20250401", "Gemini 2.0 Flash"),
         ("gpt-x", "gpt-x"),
         ("claude-opus-5-5-x1", "claude-opus-5-5-x1"),
     ])
@@ -21,9 +26,31 @@ private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
 
     @Test func capsuleJoinsWhatIsKnown() {
         #expect(ModelName.capsule(model: "claude-opus-5-5", effort: "high") == "Opus 5.5 · high")
+        #expect(ModelName.capsule(model: "gemini-4-neon", effort: "high", context: "12%") == "Gemini 4 Neon · high · 12%")
         #expect(ModelName.capsule(model: "claude-opus-5-5", effort: nil) == "Opus 5.5")
         #expect(ModelName.capsule(model: nil, effort: "low") == "low")
         #expect(ModelName.capsule(model: nil, effort: nil) == nil)
+    }
+}
+
+@Suite struct ProviderSourceLabels {
+    @Test(arguments: [
+        (AgentProvider.claude, Source.cursor, "Claude (Cursor)"),
+        (.claude, .terminal, "Claude (Terminal)"),
+        (.claude, .orca, "Claude (Orca)"),
+        (.claude, .vscode, "Claude (VS Code)"),
+        (.claude, .background, "Claude (Background)"),
+        (.claude, .unknown, "Claude"),
+        (.antigravity, .orca, "Antigravity (Orca)"),
+        (.antigravity, .terminal, "Antigravity (Terminal)"),
+        (.antigravity, .antigravityApp, "Antigravity (App)"),
+        (.antigravity, .antigravityIDE, "Antigravity (IDE)"),
+        (.antigravity, .cursor, "Antigravity (Cursor)"),
+        (.antigravity, .vscode, "Antigravity (VS Code)"),
+        (.antigravity, .unknown, "Antigravity"),
+    ])
+    func formatsProviderAndHost(provider: AgentProvider, source: Source, expected: String) {
+        #expect(ProviderSourceLabel.text(provider: provider, source: source) == expected)
     }
 }
 
@@ -135,6 +162,20 @@ private let t0 = Date(timeIntervalSince1970: 1_792_900_000)
     @Test func aCycleDoesNotLoop() {
         let s = session("s", [agent("a", use: "u1", spawned: ["u2"]), agent("b", use: "u2", spawned: ["u1"])])
         #expect(SessionTree.items([s], expanded: ["s"]).count == 3)
+    }
+
+    @Test func nestsAntigravitySubagentsByParentId() {
+        let a = Subagent(id: "sub-1", agentType: "research", description: "Parent subagent", spawnDepth: 1, startedAt: t0, lastWriteAt: t0)
+        let b = Subagent(id: "sub-2", agentType: "helper", description: "Child subagent", parentId: "sub-1", spawnDepth: 2, startedAt: t0.addingTimeInterval(1), lastWriteAt: t0)
+        let s = session("s", [a, b])
+        let items = SessionTree.items([s], expanded: ["s"])
+        #expect(items.map(\.id) == ["s:s", "a:s:sub-1", "a:s:sub-2"])
+        let levels = items.compactMap { item -> (String, Int)? in
+            if case .subagent(let ag, _, let lvl) = item { return (ag.id, lvl) }
+            return nil
+        }
+        #expect(levels.map(\.0) == ["sub-1", "sub-2"])
+        #expect(levels.map(\.1) == [1, 2])
     }
 }
 

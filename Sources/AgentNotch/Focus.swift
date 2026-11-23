@@ -2,14 +2,23 @@ import AgentNotchCore
 import AppKit
 
 extension Source {
-    /// F8. Nil for sources without a host app window.
+    /// F8, F36. Nil for sources without a host app window.
     var bundleId: String? {
         switch self {
         case .cursor: "com.todesktop.230313mzl4w4u92"
         case .vscode: "com.microsoft.VSCode"
         case .orca: "com.stablyai.orca"
         case .terminal: "com.apple.Terminal"
+        case .antigravityApp: "com.google.GeminiMacOS"
+        case .antigravityIDE: "com.google.antigravity"
         case .background, .unknown: nil
+        }
+    }
+
+    var candidateBundleIds: [String] {
+        switch self {
+        case .antigravityIDE: ["com.google.antigravity", "com.google.Antigravity", "com.google.antigravity.ide"]
+        default: bundleId.map { [$0] } ?? []
         }
     }
 }
@@ -53,28 +62,40 @@ enum Focus {
     private static func focusSync(_ session: Session) -> String? {
         switch session.source {
         case .background:
-            return "claude attach \(session.id)"
+            return session.provider == .claude ? "claude attach \(session.id)" : "No window found for this session"
         case .terminal:
             focusTerminal(tty: session.tty)
             return nil
         case .cursor, .vscode:
-            // D43: the exact chat in its own trusted window (D28); else only raise the window it was
-            // last seen in; else bring the IDE forward (D27) and say so.
-            let target = IDEDeepLink.target(
-                source: session.source, sessionId: session.id, pid: session.pid, startedAt: session.startedAt,
-                isLive: session.status != .done, remembered: session.ideWindow
-            )
-            if let url = target.url {
-                NSWorkspace.shared.open(url)
-                return nil
+            // Skip Claude's `anthropic.claude-code` Cursor deep link for Antigravity sessions;
+            // activate the host app by bundle ID directly (R1, D27).
+            if session.provider == .claude {
+                // D43: the exact chat in its own trusted window (D28); else only raise the window it was
+                // last seen in; else bring the IDE forward (D27) and say so.
+                let target = IDEDeepLink.target(
+                    source: session.source, sessionId: session.id, pid: session.pid, startedAt: session.startedAt,
+                    isLive: session.status != .done, remembered: session.ideWindow
+                )
+                if let url = target.url {
+                    NSWorkspace.shared.open(url)
+                    return nil
+                }
+                if let bundleId = session.source.bundleId { activate(bundleId: bundleId) }
+                // VS Code has no window routing at all (D28); the message is for Cursor's misses.
+                return IDEDeepLink.supports(session.source) ? Self.windowNotFound : nil
             }
             if let bundleId = session.source.bundleId { activate(bundleId: bundleId) }
-            // VS Code has no window routing at all (D28); the message is for Cursor's misses.
-            return IDEDeepLink.supports(session.source) ? Self.windowNotFound : nil
+            return nil
+        case .antigravityApp, .antigravityIDE:
+            for bundleId in session.source.candidateBundleIds {
+                if activateIfRunning(bundleId: bundleId) { return nil }
+            }
+            return nil
         case .orca:
             return nil
         case .unknown:
             if session.tty != nil { focusTerminal(tty: session.tty); return nil }
+            if session.provider == .antigravity { return "No window found for this session" }
             return session.pid == nil ? "claude attach \(session.id)" : "No window found for this session"
         }
     }
@@ -110,8 +131,13 @@ enum Focus {
 
     /// D27: activate the IDE by bundle id only. Never `open -a <IDE> <cwd>`.
     static func activate(bundleId: String) {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first else { return }
+        _ = activateIfRunning(bundleId: bundleId)
+    }
+
+    @discardableResult
+    static func activateIfRunning(bundleId: String) -> Bool {
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first else { return false }
         NSApp.activate()
-        _ = app.activate(from: .current, options: [.activateIgnoringOtherApps])
+        return app.activate(from: .current, options: [.activateIgnoringOtherApps])
     }
 }

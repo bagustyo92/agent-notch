@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var demo: DemoDriver?
     /// Set by `--demo`: replay synthetic sessions instead of watching real ones.
     var demoScene: String?
-    /// Set by `--updated-to <v>` on relaunch after an in-place update (D45).
+    /// Set by `--updated-to <v>` on relaunch after an in-place update (D46).
     var updatedToVersion: AppVersion?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -141,17 +141,23 @@ enum DebugDump {
         let tasks = s.backgroundTasks.map { "\(full ? $0.activity.full : $0.activity.brief):\(ElapsedFormatter.precise(Date().timeIntervalSince($0.startedAt)))" }
             .joined(separator: ",")
         // D43, D44: the link a click would send, the remembered window, and whether the host is trusted.
-        let hosts = IDEDeepLink.hosts(source: s.source)
+        let hosts = s.provider == .claude ? IDEDeepLink.hosts(source: s.source) : []
         let link: String = if s.source == .orca {
             OrcaFocus.dumpLink(cwd: s.cwd, tty: s.tty, isLive: s.status != .done)
-        } else {
+        } else if s.provider == .claude {
             IDEDeepLink.target(source: s.source, sessionId: s.id, pid: s.pid, startedAt: s.startedAt,
                                isLive: s.status != .done, remembered: s.ideWindow, hosts: hosts).url?.absoluteString ?? "-"
+        } else {
+            "-"
         }
         let window = s.ideWindow.map { String($0.windowId) } ?? "-"
-        let trust = IDEDeepLink.locate(source: s.source, pid: s.pid, startedAt: s.startedAt, hosts: hosts)
-            .map { $0.trusted ? "yes" : "no" } ?? "-"
-        return "\(s.status)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)\twindow=\(window)\ttrust=\(trust)"
+        let trust: String = if s.provider == .claude {
+            IDEDeepLink.locate(source: s.source, pid: s.pid, startedAt: s.startedAt, hosts: hosts)
+                .map { $0.trusted ? "yes" : "no" } ?? "-"
+        } else {
+            "-"
+        }
+        return "\(s.status)\t\(s.provider.rawValue)\t\(pid)\t\(s.source)\t\(s.tty ?? "-")\t\(s.claudeVersion ?? "-")\t\(s.repo)\t\(s.branch ?? "-")\t\(title)\t\(activity)\tphase=\(s.phase?.rawValue ?? "-")\tmodel=\(model)\tctx=\(ctx)\ttokens=\(tokens)\tfiles=\(s.turnFileCount)\twaitingFor=\(s.waitingFor ?? "-")\tagents=[\(agents)]\ttasks=[\(tasks)]\tlink=\(link)\twindow=\(window)\ttrust=\(trust)"
     }
 
     static func stamp() -> String {

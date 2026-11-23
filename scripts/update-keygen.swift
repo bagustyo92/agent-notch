@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// Generate an Ed25519 signing key pair for AgentNotch updates (D45).
+// Generate an Ed25519 signing key pair for AgentNotch updates (D46).
 // Usage: swift scripts/update-keygen.swift <out-private-key-file>
 // Writes the base64 raw private key to <out-file> with mode 0600 and prints ONLY the public key.
 import CryptoKit
