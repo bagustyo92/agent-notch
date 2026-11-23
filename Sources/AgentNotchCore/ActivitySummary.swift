@@ -9,6 +9,81 @@ public enum ActivitySummary {
     static let fileTools: Set<String> = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"]
     static let describedTools: Set<String> = ["Agent", "Task"]
 
+    /// Antigravity tool call → D11-safe summary.
+    /// Antigravity encodes `tool_calls[].args` values as JSON-serialized strings (F34), so string
+    /// args are unquoted before display. `run_command` reads `toolSummary` only (never `CommandLine`);
+    /// file tools read basename only; search/web/question tools show only a safe label.
+    public static func forAntigravityToolCall(name: String, args: [String: Any]) -> Activity {
+        let label: String
+        let detail: String?
+        switch name {
+        case "run_command":
+            label = "Run"
+            detail = antigravityString(args["toolSummary"])                          // never args["CommandLine"]
+        case "read_file", "view_file", "view_file_outline", "view_code_item":
+            label = "Read"
+            detail = antigravityBasename(args["Path"] ?? args["AbsolutePath"] ?? args["TargetFile"] ?? args["File"] ?? args["file_path"])
+        case "edit_file", "replace_file_content", "multi_replace_file_content":
+            label = "Edit"
+            detail = antigravityBasename(args["Path"] ?? args["TargetFile"] ?? args["file_path"])
+        case "write_file", "write_to_file":
+            label = "Write"
+            detail = antigravityBasename(args["Path"] ?? args["TargetFile"] ?? args["file_path"])
+        case "invoke_subagent":
+            label = "Subagent"
+            detail = antigravityString(args["Role"])                                 // never args["Prompt"]
+        case "define_subagent":
+            label = "Subagent"
+            detail = antigravityString(args["Name"])                                 // never args["SystemPrompt"]
+        case "ask_question":
+            label = "Ask"
+            detail = nil
+        case "grep_search":
+            label = "Search"
+            detail = nil
+        case "find_by_name":
+            label = "Find"
+            detail = nil
+        case "list_dir":
+            label = "List"
+            detail = nil
+        case "search_web", "read_url_content":
+            label = "Web"
+            detail = nil
+        case "browser_subagent":
+            label = "Browser"
+            detail = nil
+        case "manage_task", "command_status", "send_command_input":
+            label = "Terminal"
+            detail = nil
+        case "send_message":
+            label = "Message"
+            detail = nil
+        default:
+            label = displayName(for: name)
+            detail = nil
+        }
+        let full: String
+        if let detail, !detail.isEmpty { full = finish("\(label) · \(detail)") } else { full = finish(label) }
+        return Activity(full: full, brief: finish(label))
+    }
+
+    static func antigravityString(_ any: Any?) -> String? {
+        guard let raw = string(any) else { return nil }
+        let unquoted = unquoteJSONString(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        return unquoted.isEmpty ? nil : unquoted
+    }
+
+    static func unquoteJSONString(_ s: String) -> String {
+        guard s.count >= 2, s.first == "\"", s.last == "\"" else { return s }
+        if let decoded = try? JSONDecoder().decode(String.self, from: Data(s.utf8)) { return decoded }
+        return String(s.dropFirst().dropLast())
+    }
+
+    private static func antigravityBasename(_ any: Any?) -> String? {
+        antigravityString(any).map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     public static func forToolUse(name: String, input: [String: Any]) -> Activity {
         let label = displayName(for: name)
         let detail: String?

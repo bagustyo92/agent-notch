@@ -6,9 +6,25 @@ import Testing
     #expect(Status.allCases.sorted() == [.waiting, .working, .idle, .done])
 }
 
-@Test func sourceIncludesOrca() {
+@Test func sourceIncludesOrcaAndAntigravityHosts() {
     #expect(Source.allCases.contains(.orca))
     #expect(Source.orca.rawValue == "orca")
+    #expect(Source.allCases.contains(.antigravityApp))
+    #expect(Source.allCases.contains(.antigravityIDE))
+    #expect(AgentProvider.allCases == [.claude, .antigravity])
+}
+
+@Test func cascadeRunStatusMapsDefensively() {
+    let t0 = Date(timeIntervalSince1970: 1_792_900_000)
+    func s(_ raw: String) -> Status {
+        Status.from(ListedSession(sessionId: "a", cwd: "/Users/dev/a", kind: .interactive, name: "a", startedAt: t0, status: raw, provider: .antigravity))
+    }
+    #expect(s("CASCADE_RUN_STATUS_RUNNING") == .working)
+    #expect(s("CASCADE_RUN_STATUS_WAITING_FOR_USER") == .waiting)
+    #expect(s("CASCADE_RUN_STATUS_WAITING") == .waiting)
+    #expect(s("CASCADE_RUN_STATUS_IDLE") == .idle)
+    #expect(s("CASCADE_RUN_STATUS_DONE") == .done)
+    #expect(s("done") == .done)
 }
 
 @Suite struct RunningChildren {

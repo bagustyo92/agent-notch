@@ -131,32 +131,84 @@ public enum StripLabel {
 }
 
 /// `claude-opus-5-5` → `Opus 5.5`, `claude-sonnet-4-5-20250929[1m]` → `Sonnet 4.5`,
-/// `claude-3-5-haiku-20241022` → `Haiku 3.5` (D30). Ids that do not look like that pass through.
+/// `claude-3-5-haiku-20241022` → `Haiku 3.5`, `gemini-4-neon` → `Gemini 4 Neon`,
+/// `gemini-2.5-pro` → `Gemini 2.5 Pro` (D30). Ids that do not look like that pass through.
 public enum ModelName {
     public static func display(_ id: String) -> String {
         let base = id.split(separator: "[").first.map(String.init) ?? id
         let parts = base.lowercased().split(separator: "-").map(String.init)
-        guard parts.first == "claude" else { return id }
-        var family: String?
-        var version: [String] = []
-        for part in parts.dropFirst() {
-            if part.allSatisfy(\.isNumber) {
-                if part.count <= 2 { version.append(part) }        // 8-digit snapshot dates are dropped
-            } else if family == nil, part.allSatisfy(\.isLetter) {
-                family = part.prefix(1).uppercased() + part.dropFirst()
-            } else {
-                return id
+        if parts.first == "claude" {
+            var family: String?
+            var version: [String] = []
+            for part in parts.dropFirst() {
+                if part.allSatisfy(\.isNumber) {
+                    if part.count <= 2 { version.append(part) }        // 8-digit snapshot dates are dropped
+                } else if family == nil, part.allSatisfy(\.isLetter) {
+                    family = part.prefix(1).uppercased() + part.dropFirst()
+                } else {
+                    return id
+                }
             }
+            guard let family else { return id }
+            return version.isEmpty ? family : "\(family) \(version.joined(separator: "."))"
         }
-        guard let family else { return id }
-        return version.isEmpty ? family : "\(family) \(version.joined(separator: "."))"
+        if parts.first == "gemini" {
+            var tokens: [String] = ["Gemini"]
+            var version: [String] = []
+            func flushVersion() {
+                guard !version.isEmpty else { return }
+                tokens.append(version.joined(separator: "."))
+                version.removeAll()
+            }
+            for part in parts.dropFirst() {
+                if part.allSatisfy(\.isNumber) {
+                    if part.count <= 2 { version.append(part) }        // drop 6/8-digit snapshot dates
+                } else if part.allSatisfy({ $0.isNumber || $0 == "." }), part.contains("."), part.first?.isNumber == true, part.last?.isNumber == true {
+                    flushVersion()
+                    tokens.append(part)
+                } else if part.allSatisfy(\.isLetter) {
+                    flushVersion()
+                    tokens.append(part.prefix(1).uppercased() + part.dropFirst())
+                } else {
+                    return id
+                }
+            }
+            flushVersion()
+            return tokens.count > 1 ? tokens.joined(separator: " ") : id
+        }
+        return id
     }
 
-    /// `Opus 5.5 · high · 62%`; nil when none is known. The context label comes from
-    /// `ContextIndicator` (D38).
+    /// `Opus 5.5 · high · 62%` or `Gemini 4 Neon · high · 12%`; nil when none is known.
+    /// The context label comes from `ContextIndicator` (D38).
     public static func capsule(model: String?, effort: String?, context: String? = nil) -> String? {
         let parts = [model.map(display), effort, context].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// Unified provider + host label shown on the row meta line (e.g. `Claude (Cursor)`, `Antigravity (Orca)`).
+public enum ProviderSourceLabel {
+    public static func text(provider: AgentProvider, source: Source) -> String {
+        let providerName: String = switch provider {
+        case .claude: "Claude"
+        case .antigravity: "Antigravity"
+        }
+        guard let host = hostName(for: source) else { return providerName }
+        return "\(providerName) (\(host))"
+    }
+
+    public static func hostName(for source: Source) -> String? {
+        switch source {
+        case .terminal: "Terminal"
+        case .vscode: "VS Code"
+        case .cursor: "Cursor"
+        case .orca: "Orca"
+        case .antigravityApp: "App"
+        case .antigravityIDE: "IDE"
+        case .background: "Background"
+        case .unknown: nil
+        }
     }
 }
 
@@ -306,6 +358,10 @@ public enum SessionTree {
         let byId = Dictionary(agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var parent: [String: String] = [:]
         for agent in agents {
+            if let parentId = agent.parentId, parentId != agent.id, byId[parentId] != nil {
+                parent[agent.id] = parentId
+                continue
+            }
             guard let use = agent.toolUseId else { continue }
             if let owner = agents.first(where: { $0.id != agent.id && $0.spawnedToolUseIds.contains(use) }) {
                 parent[agent.id] = owner.id

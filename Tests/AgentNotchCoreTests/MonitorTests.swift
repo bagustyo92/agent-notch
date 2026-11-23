@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import AgentNotchCore
 
@@ -146,4 +147,129 @@ final class AliveSet: @unchecked Sendable {
     init(_ pids: Set<Int32>) { self.pids = pids }
     func contains(_ pid: Int32) -> Bool { lock.withLock { pids.contains(pid) } }
     func remove(_ pid: Int32) { lock.withLock { _ = pids.remove(pid) } }
+}
+
+@MainActor
+@Suite struct MonitorCoexistence {
+    private func makeAntigravitySurface(convId: String, status: String, now: Date) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agentnotch-coexist-\(UUID().uuidString)", isDirectory: true)
+        let cliDir = root.appendingPathComponent("antigravity-cli", isDirectory: true)
+        let transcriptDir = cliDir
+            .appendingPathComponent("brain/\(convId)/.system_generated/logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: transcriptDir, withIntermediateDirectories: true)
+        try fixtureData("antigravity-transcript.jsonl").write(to: transcriptDir.appendingPathComponent("transcript.jsonl"))
+
+        let dbURL = cliDir.appendingPathComponent("conversation_summaries.db")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dbURL.path, &db) == SQLITE_OK)
+        let handle = try #require(db)
+        defer { sqlite3_close(handle) }
+        #expect(sqlite3_exec(handle, """
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE conversation_summaries (
+                conversation_id text PRIMARY KEY, title text NOT NULL DEFAULT "",
+                last_modified_time datetime NOT NULL, workspace_uris text NOT NULL,
+                status text NOT NULL DEFAULT "", agent_name text NOT NULL DEFAULT "",
+                parent_conversation_id text NOT NULL DEFAULT "", nesting_depth integer NOT NULL DEFAULT 0,
+                not_fully_idle numeric NOT NULL DEFAULT false, killed numeric NOT NULL DEFAULT false,
+                last_user_input_time datetime NOT NULL
+            );
+            """, nil, nil, nil) == SQLITE_OK)
+        let iso = ISO8601DateFormatter().string(from: now)
+        let sql = """
+            INSERT INTO conversation_summaries VALUES (
+                '\(convId)', 'Antigravity feature', '\(iso)', '["file:///Users/dev/work/ag-repo"]',
+                '\(status)', '', '', 0, 1, 0, '\(iso)'
+            );
+            """
+        #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
+        return root
+    }
+
+    @Test func claudeAndAntigravityCoexistWithoutClobberingEachOther() async throws {
+        let root = try makeAntigravitySurface(convId: "ag-conv-1", status: "CASCADE_RUN_STATUS_RUNNING", now: t0)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = SessionStore(testedVersion: "2.1.310")
+        let claudeEntry = ListedSession(
+            sessionId: "claude-1", pid: 4242, cwd: "/Users/dev/work/claude-repo",
+            kind: .interactive, name: "claude-repo", startedAt: t0, status: "busy", version: "2.1.310"
+        )
+        let lister = SessionLister(command: StubCommand(.success([claudeEntry])), registry: RegistryReader(directory: fixture("nope")), minInterval: 0)
+        let agReader = AntigravityReader(
+            surfaces: [AntigravitySurface(name: "antigravity-cli", directory: root.appendingPathComponent("antigravity-cli"))],
+            processScanner: { ["ag-conv-1": AntigravityProcessInfo(pid: 9001, executablePath: "/Users/dev/.local/bin/agy", source: .orca, startedAt: t0)] },
+            branchResolver: { _ in "feat/ag" }
+        )
+        let monitor = Monitor(
+            store: store, lister: lister,
+            sessionsDirectory: fixture("nope"), projectsDirectory: fixture("nope"),
+            probe: { _ in (.cursor, nil) }, transcriptLocator: { _ in nil },
+            transcriptModifiedAt: { _ in nil }, isAlive: { _ in true },
+            antigravityReader: agReader
+        )
+
+        await monitor.refresh(now: t0)
+
+        // First refresh seeds both providers silently (no attention pop at launch).
+        #expect(store.attentionLog.isEmpty)
+        #expect(store.sessions.count == 2)
+
+        let claude = try #require(store.session(id: "claude-1"))
+        #expect(claude.provider == .claude)
+        #expect(claude.source == .cursor)
+
+        let ag = try #require(store.session(id: "ag-conv-1"))
+        #expect(ag.provider == .antigravity)
+        #expect(ag.source == .orca)
+        #expect(ag.branch == "feat/ag")
+        #expect(ag.aiTitle == "Antigravity feature")
+
+        // Wait briefly for Antigravity transcript attachment off-actor.
+        for _ in 0..<40 where store.session(id: "ag-conv-1")?.model == nil { try await Task.sleep(for: .milliseconds(50)) }
+        let attached = try #require(store.session(id: "ag-conv-1"))
+        #expect(attached.model == "gemini-4-neon")
+        #expect(attached.effort == "high")
+        #expect(attached.contextTokens == 120_000)
+        #expect(attached.contextWindow == 1_000_000)
+        #expect(attached.activity == Activity(full: "Run · Unit test execution", brief: "Run"))
+
+        // Refreshing only Antigravity must NOT drop or alter Claude sessions.
+        await monitor.refreshAntigravity(now: t0.addingTimeInterval(2))
+        #expect(store.session(id: "claude-1")?.status == .working)
+        #expect(store.session(id: "ag-conv-1")?.status == .working)
+
+        // Refreshing only Claude must NOT drop or alter Antigravity sessions.
+        await monitor.refreshClaude(now: t0.addingTimeInterval(3))
+        #expect(store.session(id: "claude-1")?.status == .working)
+        #expect(store.session(id: "ag-conv-1")?.status == .working)
+
+        // versionNote stays nil because Claude matches testedVersion and Antigravity never triggers Claude version drift.
+        #expect(store.versionNote == nil)
+    }
+
+    @Test func antigravityWorksEvenWhenClaudeIsAbsentOrFailing() async throws {
+        let root = try makeAntigravitySurface(convId: "ag-only-1", status: "CASCADE_RUN_STATUS_RUNNING", now: t0)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = SessionStore()
+        let failingClaude = SessionLister(command: StubCommand(.failure(AgentsCommandError.executableNotFound)), registry: RegistryReader(directory: fixture("nope")), minInterval: 0)
+        let agReader = AntigravityReader(
+            surfaces: [AntigravitySurface(name: "antigravity-cli", directory: root.appendingPathComponent("antigravity-cli"))],
+            processScanner: { [:] },
+            branchResolver: { _ in "main" }
+        )
+        let monitor = Monitor(
+            store: store, lister: failingClaude,
+            sessionsDirectory: fixture("nope"), projectsDirectory: fixture("nope"),
+            probe: { _ in (.unknown, nil) }, transcriptLocator: { _ in nil },
+            transcriptModifiedAt: { _ in nil }, isAlive: { _ in true },
+            antigravityReader: agReader
+        )
+        await monitor.refresh(now: t0)
+        #expect(store.sessions.map(\.id) == ["ag-only-1"])
+        #expect(store.sessions[0].provider == .antigravity)
+        #expect(store.sessions[0].status == .working)
+    }
 }

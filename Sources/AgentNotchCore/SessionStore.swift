@@ -19,6 +19,7 @@ public struct AttentionEvent: Sendable, Equatable {
 @Observable
 public final class SessionStore {
     public static let defaultTestedVersion = "2.1.310"
+    public static let defaultTestedAntigravityVersion = "1.5.15"
 
     public private(set) var sessions: [Session] = []
     public private(set) var versionNote: String?
@@ -72,8 +73,9 @@ public final class SessionStore {
     @ObservationIgnored private var turnEdits: [String: Set<Int>] = [:]
     /// Sessions whose 200k model went past 200k tokens: they run with the 1M window (`[1m]`, D38).
     @ObservationIgnored private var extendedContext: Set<String> = []
-    /// The first list only seeds the store: launching the app must not pop the notch open.
-    @ObservationIgnored private var hasListed = false
+    /// The first list per provider only seeds the store: launching the app must not pop the notch open.
+    @ObservationIgnored private var listedProviders: Set<AgentProvider> = []
+    @ObservationIgnored private var hasListedAll = false
 
     public init(
         testedVersion: String = SessionStore.defaultTestedVersion,
@@ -89,9 +91,15 @@ public final class SessionStore {
 
     public func session(id: String) -> Session? { byId[id] }
 
-    /// Replace the live list. Sessions that vanished become Done; probe results, titles,
+    /// Replace the live list (optionally scoped to one provider so Claude and Antigravity refreshes
+    /// never clobber each other). Sessions that vanished become Done; probe results, titles,
     /// branches and activity of surviving sessions are kept.
-    public func replaceList(_ listed: [ListedSession], now: Date) {
+    public func replaceList(_ listed: [ListedSession], provider: AgentProvider? = nil, now: Date) {
+        let alreadyListed: Bool = if let provider {
+            listedProviders.contains(provider) || hasListedAll
+        } else {
+            hasListedAll || !listedProviders.isEmpty
+        }
         var seen = Set<String>()
         for entry in listed {
             if entry.kind == .background {
@@ -100,41 +108,68 @@ public final class SessionStore {
             seen.insert(entry.sessionId)
             let status = Status.from(entry)
             if var existing = byId[entry.sessionId] {
+                existing.provider = entry.provider
                 // D43: a new process for the session brings its own start time, and its source and
                 // tty are probed again. A row's pid and startedAt always come from one entry.
                 if let pid = entry.pid, pid != existing.pid {
                     existing.pid = pid
                     existing.startedAt = entry.startedAt
-                    if existing.source != .background { existing.source = .unknown; existing.tty = nil }
+                    if let hint = entry.sourceHint {
+                        existing.source = hint
+                        existing.tty = entry.tty
+                    } else if existing.source != .background {
+                        existing.source = .unknown
+                        existing.tty = nil
+                    }
+                } else if let hint = entry.sourceHint,
+                          existing.source == .unknown || (entry.provider == .antigravity && hint != .unknown)
+                {
+                    existing.source = hint
+                    if let tty = entry.tty { existing.tty = tty }
                 }
                 existing.cwd = entry.cwd.isEmpty ? existing.cwd : entry.cwd
                 existing.name = entry.name
                 existing.kind = entry.kind
+                if let aiTitle = entry.aiTitle { existing.aiTitle = aiTitle }
+                if let branch = entry.branch, entry.provider == .antigravity || existing.branch == nil {
+                    existing.branch = branch
+                }
                 existing.claudeVersion = entry.version ?? existing.claudeVersion
                 existing.waitingFor = status == .waiting ? entry.waitingFor : nil
                 existing.needs = status == .waiting ? entry.needs : nil
                 if existing.status == .done, status != .done { existing.endedAt = nil }
                 transition(&existing, to: status, now: now)
+                if status == .done, let endedAt = entry.endedAt, existing.endedAt == nil {
+                    existing.endedAt = endedAt
+                }
                 byId[entry.sessionId] = existing
             } else {
+                let initialSource = entry.sourceHint ?? (entry.kind == .background ? .background : .unknown)
+                let changedAt = (status == .done ? entry.endedAt : nil) ?? now
                 var fresh = Session(
-                    id: entry.sessionId, pid: entry.pid, cwd: entry.cwd, name: entry.name, kind: entry.kind,
-                    source: entry.kind == .background ? .background : .unknown,
-                    status: status, statusChangedAt: now, startedAt: entry.startedAt, claudeVersion: entry.version
+                    id: entry.sessionId, provider: entry.provider, pid: entry.pid, cwd: entry.cwd,
+                    branch: entry.branch, name: entry.name, aiTitle: entry.aiTitle, kind: entry.kind,
+                    source: initialSource, status: status, statusChangedAt: changedAt,
+                    startedAt: entry.startedAt, endedAt: status == .done ? (entry.endedAt ?? now) : nil,
+                    claudeVersion: entry.version, tty: entry.tty
                 )
-                if status == .done { fresh.endedAt = now }
                 if status == .waiting { fresh.waitingFor = entry.waitingFor; fresh.needs = entry.needs }
                 if status.isActive { startTurn(&fresh, now: now) }
                 byId[entry.sessionId] = fresh
-                if hasListed, status == .working { fireAttention(fresh, .started, now: now) }
-                if hasListed, status == .waiting { fireAttention(fresh, .needsYou, now: now) }
+                if alreadyListed, status == .working { fireAttention(fresh, .started, now: now) }
+                if alreadyListed, status == .waiting { fireAttention(fresh, .needsYou, now: now) }
             }
         }
-        for (id, var session) in byId where !seen.contains(id) && session.status != .done {
+        for (id, var session) in byId
+        where !seen.contains(id) && session.status != .done && (provider == nil || session.provider == provider) {
             transition(&session, to: .done, now: now)
             byId[id] = session
         }
-        hasListed = true
+        if let provider {
+            listedProviders.insert(provider)
+        } else {
+            hasListedAll = true
+        }
         tick(now: now)
     }
 
@@ -209,6 +244,7 @@ public final class SessionStore {
         agent.agentType = update.agentType
         agent.description = update.description
         agent.toolUseId = update.toolUseId ?? agent.toolUseId
+        agent.parentId = update.parentId ?? agent.parentId
         agent.spawnDepth = update.spawnDepth
         if let at = update.lastWriteAt { agent.lastWriteAt = max(agent.lastWriteAt, at) }
         if let read = update.transcript {
@@ -370,7 +406,7 @@ public final class SessionStore {
             if $0.statusChangedAt != $1.statusChangedAt { return $0.statusChangedAt > $1.statusChangedAt }
             return $0.id < $1.id
         }
-        let others = Set(byId.values.compactMap(\.claudeVersion)).subtracting([testedVersion]).sorted()
+        let others = Set(byId.values.filter { $0.provider == .claude }.compactMap(\.claudeVersion)).subtracting([testedVersion]).sorted()
         versionNote = others.isEmpty ? nil : "Tested with Claude Code \(testedVersion) · running \(others.joined(separator: ", "))"
     }
 }
