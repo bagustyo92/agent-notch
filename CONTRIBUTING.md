@@ -54,6 +54,8 @@ The background task records in `TranscriptTail.swift` (`run_in_background` start
 calls; F22, F23, F25) are the most likely to drift.
 The Cursor extension-host title shape parsed in `IDEDeepLink.swift` (F27) can drift with Cursor
 updates; `--dump` shows `trust=` and `link=` for each session.
+Orca process ancestry in `ProcessProbe.swift` (F30) and the `orca terminal list/switch` / `orca worktree activate`
+CLI JSON and flags in `OrcaFocus.swift` (F32) can drift with Orca updates.
 When Claude Code adds a model, update the model table in `Sources/AgentNotchCore/ContextWindow.swift`
 and F20 in `docs/DESIGN.md`.
 

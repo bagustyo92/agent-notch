@@ -7,19 +7,50 @@ extension Source {
         switch self {
         case .cursor: "com.todesktop.230313mzl4w4u92"
         case .vscode: "com.microsoft.VSCode"
+        case .orca: "com.stablyai.orca"
         case .terminal: "com.apple.Terminal"
         case .background, .unknown: nil
         }
     }
 }
 
-/// D14, D25, D27, D43: focus a session's window. Read-only otherwise (R1).
+/// D14, D25, D27, D43, D44: focus a session's window. Read-only otherwise (R1).
 @MainActor
 enum Focus {
     static let windowNotFound = "Couldn't find this session's window"
+    static let orcaWorkspaceNotFound = "Couldn't select this workspace in Orca"
+
+    private static var clickToken: UInt64 = 0
+    private static var orcaTask: Task<Void, Never>?
+
+    /// Focus the session's window; invokes `onMessage` on `@MainActor` when there is a status
+    /// message to display (synchronously for non-Orca sources, asynchronously for `.orca`).
+    static func focus(_ session: Session, onMessage: @escaping @MainActor (String) -> Void) {
+        clickToken &+= 1
+        let token = clickToken
+        orcaTask?.cancel()
+        orcaTask = nil
+
+        if session.source == .orca {
+            if let bundleId = Source.orca.bundleId { activate(bundleId: bundleId) }
+            let cwd = session.cwd
+            let tty = session.tty
+            let isLive = session.status != .done
+            orcaTask = Task.detached(priority: .userInitiated) {
+                let route = await OrcaFocus.focus(cwd: cwd, tty: tty, isLive: isLive)
+                await MainActor.run {
+                    guard clickToken == token else { return }
+                    if route == .fallback { onMessage(Self.orcaWorkspaceNotFound) }
+                }
+            }
+            return
+        }
+
+        if let message = focusSync(session) { onMessage(message) }
+    }
 
     /// Returns a message to display instead when there is nothing to focus.
-    static func focus(_ session: Session) -> String? {
+    private static func focusSync(_ session: Session) -> String? {
         switch session.source {
         case .background:
             return "claude attach \(session.id)"
@@ -40,6 +71,8 @@ enum Focus {
             if let bundleId = session.source.bundleId { activate(bundleId: bundleId) }
             // VS Code has no window routing at all (D28); the message is for Cursor's misses.
             return IDEDeepLink.supports(session.source) ? Self.windowNotFound : nil
+        case .orca:
+            return nil
         case .unknown:
             if session.tty != nil { focusTerminal(tty: session.tty); return nil }
             return session.pid == nil ? "claude attach \(session.id)" : "No window found for this session"
